@@ -1,0 +1,340 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  BOOKED
+  LOST
+}
+
+enum CallStatus {
+  RINGING
+  MISSED
+  ANSWERED
+  VOICEMAIL
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+  SYSTEM
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  RECEIVED
+}
+
+enum ConversationChannel {
+  SMS
+  CHAT
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+model User {
+  id          String   @id @default(cuid())
+  clerkUserId String   @unique
+  businessId  String
+  email       String   @unique
+  firstName   String?
+  lastName    String?
+  role        UserRole @default(STAFF)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, role])
+}
+
+model Business {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  websiteUrl  String?
+  industry    String?
+  timezone    String   @default("America/New_York")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users         User[]
+  locations     Location[]
+  leads         Lead[]
+  calls         Call[]
+  messages      Message[]
+  conversations Conversation[]
+  appointments  Appointment[]
+}
+
+model Location {
+  id            String   @id @default(cuid())
+  businessId    String
+  name          String
+  slug          String?
+  timezone      String   @default("America/New_York")
+  addressLine1  String?
+  addressLine2  String?
+  city          String?
+  state         String?
+  postalCode    String?
+  country       String   @default("US")
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  phoneNumbers    PhoneNumber[]
+  businessHours   BusinessHours[]
+  missedCallRule  MissedCallRule?
+  chatbotSettings ChatbotSettings?
+  leads           Lead[]
+  calls           Call[]
+  messages        Message[]
+  conversations   Conversation[]
+  appointments    Appointment[]
+
+  @@index([businessId])
+  @@unique([businessId, slug])
+}
+
+model PhoneNumber {
+  id           String   @id @default(cuid())
+  businessId   String
+  locationId   String?
+  label        String?
+  phoneNumber  String   @unique
+  twilioSid    String?  @unique
+  voiceEnabled Boolean  @default(true)
+  smsEnabled   Boolean  @default(true)
+  isPrimary    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  calls    Call[]
+  messages Message[]
+
+  @@index([businessId])
+  @@index([locationId])
+}
+
+model BusinessHours {
+  id         String   @id @default(cuid())
+  locationId String
+  dayOfWeek  Int
+  opensAt    String?
+  closesAt   String?
+  isClosed   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, dayOfWeek])
+  @@index([locationId])
+}
+
+model MissedCallRule {
+  id                   String   @id @default(cuid())
+  locationId           String   @unique
+  isEnabled            Boolean  @default(true)
+  delaySeconds         Int      @default(90)
+  autoReplyText        String
+  sendAfterHoursReply  Boolean  @default(true)
+  afterHoursReplyText  String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+}
+
+model ChatbotSettings {
+  id             String   @id @default(cuid())
+  locationId     String   @unique
+  isEnabled      Boolean  @default(false)
+  welcomeMessage String?
+  primaryColor   String?
+  collectName    Boolean  @default(true)
+  collectPhone   Boolean  @default(true)
+  collectEmail   Boolean  @default(false)
+  handoffMessage String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+}
+
+model Lead {
+  id                String              @id @default(cuid())
+  businessId        String
+  locationId        String?
+  sourceChannel     ConversationChannel?
+  sourceDescription String?
+  firstName         String?
+  lastName          String?
+  email             String?
+  phone             String?
+  status            LeadStatus          @default(NEW)
+  notes             String?
+  tags              String[]
+  smsOptedOut       Boolean             @default(false)
+  smsOptedOutAt     DateTime?
+  lastContactedAt   DateTime?
+  convertedAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  business      Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location      Location?      @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  calls         Call[]
+  messages      Message[]
+  conversations Conversation[]
+  appointments  Appointment[]
+
+  @@index([businessId, status])
+  @@index([locationId])
+  @@index([sourceChannel])
+}
+
+model Conversation {
+  id               String              @id @default(cuid())
+  businessId       String
+  locationId       String?
+  leadId           String?
+  channel          ConversationChannel
+  subject          String?
+  isOpen           Boolean             @default(true)
+  externalThreadId String?
+  metadata         Json?
+  lastMessageAt    DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location     Location?     @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  lead         Lead?         @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  messages     Message[]
+  appointments Appointment[]
+
+  @@index([businessId, channel])
+  @@index([locationId])
+  @@index([leadId])
+}
+
+model Message {
+  id                String              @id @default(cuid())
+  businessId        String
+  locationId        String?
+  leadId            String?
+  conversationId    String
+  phoneNumberId     String?
+  channel           ConversationChannel
+  direction         MessageDirection
+  status            MessageStatus       @default(QUEUED)
+  body              String
+  fromAddress       String?
+  toAddress         String?
+  providerMessageId String?             @unique
+  metadata          Json?
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  business     Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location     Location?    @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  phoneNumber  PhoneNumber? @relation(fields: [phoneNumberId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, channel])
+  @@index([conversationId])
+  @@index([leadId])
+  @@index([locationId])
+}
+
+model Call {
+  id               String     @id @default(cuid())
+  businessId       String
+  locationId       String?
+  leadId           String?
+  phoneNumberId    String?
+  providerCallId   String?    @unique
+  fromPhone        String
+  toPhone          String
+  status           CallStatus @default(RINGING)
+  durationSeconds  Int?
+  recordingUrl     String?
+  summary          String?
+  metadata         Json?
+  smsSent          Boolean    @default(false)
+  smsSentAt        DateTime?
+  missedAt         DateTime?
+  automationStatus String?
+  receivedAt       DateTime?
+  endedAt          DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location    Location?    @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  lead        Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  phoneNumber PhoneNumber? @relation(fields: [phoneNumberId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status])
+  @@index([locationId])
+  @@index([leadId])
+  @@index([fromPhone, toPhone])
+}
+
+model Appointment {
+  id              String            @id @default(cuid())
+  businessId      String
+  locationId      String?
+  leadId          String
+  conversationId  String?
+  status          AppointmentStatus @default(SCHEDULED)
+  title           String
+  description     String?
+  startsAt        DateTime
+  endsAt          DateTime?
+  providerEventId String?           @unique
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location     Location?     @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  lead         Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status])
+  @@index([locationId])
+  @@index([leadId])
+}
