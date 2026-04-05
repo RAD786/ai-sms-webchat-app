@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum UserRole {
@@ -73,17 +74,18 @@ model User {
 }
 
 model Business {
-  id          String   @id @default(cuid())
-  name        String
-  slug        String   @unique
-  websiteUrl  String?
-  industry    String?
-  timezone    String   @default("America/New_York")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(cuid())
+  name       String
+  slug       String   @unique
+  websiteUrl String?
+  industry   String?
+  timezone   String   @default("America/New_York")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   users         User[]
   locations     Location[]
+  phoneNumbers  PhoneNumber[]
   leads         Lead[]
   calls         Call[]
   messages      Message[]
@@ -92,20 +94,20 @@ model Business {
 }
 
 model Location {
-  id            String   @id @default(cuid())
-  businessId    String
-  name          String
-  slug          String?
-  timezone      String   @default("America/New_York")
-  addressLine1  String?
-  addressLine2  String?
-  city          String?
-  state         String?
-  postalCode    String?
-  country       String   @default("US")
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String   @id @default(cuid())
+  businessId   String
+  name         String
+  slug         String?
+  timezone     String   @default("America/New_York")
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String   @default("US")
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
   phoneNumbers    PhoneNumber[]
@@ -118,8 +120,8 @@ model Location {
   conversations   Conversation[]
   appointments    Appointment[]
 
-  @@index([businessId])
   @@unique([businessId, slug])
+  @@index([businessId])
 }
 
 model PhoneNumber {
@@ -161,15 +163,15 @@ model BusinessHours {
 }
 
 model MissedCallRule {
-  id                   String   @id @default(cuid())
-  locationId           String   @unique
-  isEnabled            Boolean  @default(true)
-  delaySeconds         Int      @default(90)
-  autoReplyText        String
-  sendAfterHoursReply  Boolean  @default(true)
-  afterHoursReplyText  String?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  locationId          String   @unique
+  isEnabled           Boolean  @default(true)
+  delaySeconds        Int      @default(90)
+  autoReplyText       String
+  sendAfterHoursReply Boolean  @default(true)
+  afterHoursReplyText String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
 }
@@ -191,7 +193,7 @@ model ChatbotSettings {
 }
 
 model Lead {
-  id                String              @id @default(cuid())
+  id                String               @id @default(cuid())
   businessId        String
   locationId        String?
   sourceChannel     ConversationChannel?
@@ -200,15 +202,15 @@ model Lead {
   lastName          String?
   email             String?
   phone             String?
-  status            LeadStatus          @default(NEW)
+  status            LeadStatus           @default(NEW)
   notes             String?
   tags              String[]
-  smsOptedOut       Boolean             @default(false)
+  smsOptedOut       Boolean              @default(false)
   smsOptedOutAt     DateTime?
   lastContactedAt   DateTime?
   convertedAt       DateTime?
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
 
   business      Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
   location      Location?      @relation(fields: [locationId], references: [id], onDelete: SetNull)
