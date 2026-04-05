@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import type { Route } from "next";
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/dashboard/app-shell";
@@ -11,7 +12,7 @@ export default async function DashboardLayout({
   const { userId } = await auth();
 
   if (!userId) {
-    redirect("/sign-in");
+    redirect("/sign-in" as Route);
   }
 
   const user = await currentUser();

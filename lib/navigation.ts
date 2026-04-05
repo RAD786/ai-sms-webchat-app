@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import type { LucideIcon } from "lucide-react";
 import {
   Building2,
@@ -11,7 +12,7 @@ import {
 
 export type DashboardNavItem = {
   label: string;
-  href: string;
+  href: Route;
   icon: LucideIcon;
 };
 
@@ -52,4 +53,3 @@ export const dashboardNavigation: DashboardNavItem[] = [
     icon: Workflow
   }
 ];
-

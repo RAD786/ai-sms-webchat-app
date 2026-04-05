@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import Link from "next/link";
 import { ArrowRight, MessageSquareText, PanelsTopLeft, PhoneCall } from "lucide-react";
 
@@ -26,7 +27,7 @@ export default function HomePage() {
           </p>
         </div>
         <nav className="flex items-center gap-3 text-sm font-medium">
-          <Link href="/sign-in" className="rounded-full px-4 py-2 text-slate-600 transition hover:bg-slate-100">
+          <Link href={"/sign-in" as Route} className="rounded-full px-4 py-2 text-slate-600 transition hover:bg-slate-100">
             Sign in
           </Link>
           <Link
@@ -62,7 +63,7 @@ export default function HomePage() {
               <ArrowRight className="h-4 w-4" />
             </Link>
             <Link
-              href="/sign-up"
+              href={"/sign-up" as Route}
               className="rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
             >
               Create account
@@ -102,4 +103,3 @@ export default function HomePage() {
     </main>
   );
 }
-
