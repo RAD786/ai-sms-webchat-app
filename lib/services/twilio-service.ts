@@ -83,12 +83,38 @@ export class TwilioService {
     from?: string;
   }) {
     const client = this.getClient();
+    const from = args.from ?? env.TWILIO_PHONE_NUMBER;
 
-    return client.messages.create({
+    console.info("[twilio.sms.send]", "Sending outbound SMS", {
+      from,
       to: args.to,
-      body: args.body,
-      from: args.from ?? env.TWILIO_PHONE_NUMBER
+      bodyLength: args.body.length
     });
+
+    try {
+      const message = await client.messages.create({
+        to: args.to,
+        body: args.body,
+        from
+      });
+
+      console.info("[twilio.sms.send]", "Twilio accepted outbound SMS", {
+        sid: message.sid,
+        status: message.status ?? null,
+        from: message.from ?? from,
+        to: message.to ?? args.to
+      });
+
+      return message;
+    } catch (error) {
+      console.error("[twilio.sms.send]", "Twilio SMS send failed", {
+        error: error instanceof Error ? error.message : String(error),
+        from,
+        to: args.to
+      });
+
+      throw error;
+    }
   }
 
   static toVoicePayload(params: Record<string, string>): TwilioVoiceWebhookPayload {
@@ -133,4 +159,3 @@ export class TwilioService {
     return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escaped}</Message></Response>`;
   }
 }
-

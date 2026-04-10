@@ -4,7 +4,7 @@ import { TwilioService } from "@/lib/services/twilio-service";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const LOG_PREFIX = "[twilio.sms.webhook]";
+const LOG_PREFIX = "[twilio.voice-status.webhook]";
 
 function xmlResponse(body: string, init?: ResponseInit) {
   return new Response(body, {
@@ -33,7 +33,7 @@ function getErrorMessage(error: unknown) {
 export async function GET() {
   console.info(LOG_PREFIX, "GET health check received", { method: "GET" });
 
-  return textResponse("Twilio SMS webhook is live");
+  return textResponse("Twilio voice status webhook is live");
 }
 
 export async function POST(request: Request) {
@@ -46,20 +46,23 @@ export async function POST(request: Request) {
     });
 
     const { params } = await TwilioService.parseWebhookRequest(request);
-    const payload = TwilioService.toSmsPayload(params);
+    const payload = TwilioService.toVoicePayload(params);
     const isValid = TwilioService.verifyWebhookSignature(request, params);
 
     console.info(LOG_PREFIX, "Parsed webhook payload", {
+      callSid: payload.callSid ?? null,
+      callStatus: payload.callStatus ?? null,
       from: payload.fromPhone,
       to: payload.toPhone,
-      body: payload.body,
-      messageSid: payload.messageSid ?? null,
       signatureValid: isValid
     });
 
     if (process.env.NODE_ENV === "production" && !isValid) {
       console.warn(LOG_PREFIX, "Rejected request with invalid Twilio signature", {
-        messageSid: payload.messageSid ?? null
+        callSid: payload.callSid ?? null,
+        callStatus: payload.callStatus ?? null,
+        from: payload.fromPhone,
+        to: payload.toPhone
       });
 
       return xmlResponse(TwilioService.buildEmptyTwimlResponse(), {
@@ -67,11 +70,20 @@ export async function POST(request: Request) {
       });
     }
 
-    const result = await MissedCallService.processInboundSmsReply(payload);
+    const result = await MissedCallService.processCallStatus(payload);
 
-    console.info(LOG_PREFIX, "Inbound SMS processed", result);
+    console.info(LOG_PREFIX, "Call status processed", {
+      callSid: payload.callSid ?? null,
+      callStatus: payload.callStatus ?? null,
+      from: payload.fromPhone,
+      to: payload.toPhone,
+      automationStatus: result?.automationStatus ?? null,
+      automationFired: result?.automationStatus === "sent",
+      outboundSmsSucceeded: Boolean(result?.smsSent),
+      outboundSmsFailed: result?.automationStatus === "send_failed"
+    });
   } catch (error) {
-    console.error(LOG_PREFIX, "SMS webhook processing failed", {
+    console.error(LOG_PREFIX, "Voice status webhook processing failed", {
       error: getErrorMessage(error)
     });
   }

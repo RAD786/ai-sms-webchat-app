@@ -235,6 +235,20 @@ export class MissedCallService {
     });
   }
 
+  static logCallAutomationEvent(
+    message: string,
+    payload: TwilioVoiceWebhookPayload,
+    details?: Record<string, unknown>
+  ) {
+    console.info("[missed-call.automation]", message, {
+      callSid: payload.callSid ?? null,
+      callStatus: payload.callStatus ?? null,
+      from: payload.fromPhone,
+      to: payload.toPhone,
+      ...details
+    });
+  }
+
   static async findRecentAutomatedDuplicate(call: {
     id: string;
     businessId: string;
@@ -264,8 +278,11 @@ export class MissedCallService {
 
   static async processCallStatus(payload: TwilioVoiceWebhookPayload) {
     if (!payload.callSid) {
+      this.logCallAutomationEvent("Skipping call status processing without CallSid", payload);
       return null;
     }
+
+    this.logCallAutomationEvent("Starting call status processing", payload);
 
     await this.logIncomingCall(payload);
 
@@ -286,6 +303,7 @@ export class MissedCallService {
     });
 
     if (!call) {
+      this.logCallAutomationEvent("No call record found after initial log", payload);
       return null;
     }
 
@@ -323,11 +341,22 @@ export class MissedCallService {
       }
     });
 
+    this.logCallAutomationEvent("Updated call with latest status", payload, {
+      internalStatus: updatedCall.status,
+      automationStatus: updatedCall.automationStatus
+    });
+
     if (nextStatus !== CallStatus.MISSED) {
+      this.logCallAutomationEvent("Call is not missed; automation will not fire", payload, {
+        internalStatus: updatedCall.status
+      });
       return updatedCall;
     }
 
     if (!updatedCall.location?.missedCallRule?.isEnabled) {
+      this.logCallAutomationEvent("Missed-call rule is disabled", payload, {
+        callId: updatedCall.id
+      });
       return prisma.call.update({
         where: { id: updatedCall.id },
         data: {
@@ -337,6 +366,9 @@ export class MissedCallService {
     }
 
     if (updatedCall.smsSent) {
+      this.logCallAutomationEvent("Automation SMS already sent for this call", payload, {
+        callId: updatedCall.id
+      });
       return prisma.call.update({
         where: { id: updatedCall.id },
         data: {
@@ -346,6 +378,10 @@ export class MissedCallService {
     }
 
     if (updatedCall.phoneNumber && !updatedCall.phoneNumber.smsEnabled) {
+      this.logCallAutomationEvent("Twilio number does not have SMS enabled", payload, {
+        callId: updatedCall.id,
+        phoneNumberId: updatedCall.phoneNumberId
+      });
       return prisma.call.update({
         where: { id: updatedCall.id },
         data: {
@@ -357,6 +393,10 @@ export class MissedCallService {
     const duplicateCall = await this.findRecentAutomatedDuplicate(updatedCall);
 
     if (duplicateCall) {
+      this.logCallAutomationEvent("Duplicate recent missed-call automation detected", payload, {
+        callId: updatedCall.id,
+        duplicateCallId: duplicateCall.id
+      });
       return prisma.call.update({
         where: { id: updatedCall.id },
         data: {
@@ -387,6 +427,10 @@ export class MissedCallService {
     }
 
     if (hydratedLead.smsOptedOut) {
+      this.logCallAutomationEvent("Lead has opted out of SMS", payload, {
+        callId: updatedCall.id,
+        leadId: hydratedLead.id
+      });
       return prisma.call.update({
         where: { id: updatedCall.id },
         data: {
@@ -432,6 +476,10 @@ export class MissedCallService {
     }
 
     if (!messageBody) {
+      this.logCallAutomationEvent("No missed-call message configured for this status window", payload, {
+        callId: updatedCall.id,
+        isOpen: businessHoursStatus?.isOpen ?? null
+      });
       return prisma.call.update({
         where: { id: updatedCall.id },
         data: {
@@ -456,6 +504,9 @@ export class MissedCallService {
     });
 
     if (claim.count === 0) {
+      this.logCallAutomationEvent("Call could not be claimed for SMS send", payload, {
+        callId: updatedCall.id
+      });
       return prisma.call.findUnique({
         where: {
           id: updatedCall.id
@@ -475,10 +526,22 @@ export class MissedCallService {
     });
 
     if (!freshCall || freshCall.smsSent) {
+      this.logCallAutomationEvent("Call was already updated before SMS send", payload, {
+        callId: updatedCall.id,
+        freshCallFound: Boolean(freshCall),
+        smsSent: freshCall?.smsSent ?? null
+      });
       return freshCall;
     }
 
     try {
+      this.logCallAutomationEvent("Sending missed-call SMS", payload, {
+        callId: updatedCall.id,
+        replyType,
+        to: updatedCall.fromPhone,
+        from: updatedCall.phoneNumber?.phoneNumber ?? updatedCall.toPhone
+      });
+
       const sentMessage = await TwilioService.sendSms({
         to: updatedCall.fromPhone,
         body: messageBody,
@@ -510,7 +573,7 @@ export class MissedCallService {
         sentAt: new Date()
       });
 
-      return prisma.call.update({
+      const completedCall = await prisma.call.update({
         where: {
           id: updatedCall.id
         },
@@ -521,6 +584,15 @@ export class MissedCallService {
           automationStatus: "sent"
         }
       });
+
+      this.logCallAutomationEvent("Missed-call SMS sent successfully", payload, {
+        callId: updatedCall.id,
+        replyType,
+        outboundMessageSid: sentMessage.sid,
+        outboundMessageStatus: sentMessage.status ?? null
+      });
+
+      return completedCall;
     } catch (error) {
       await prisma.call.update({
         where: {
@@ -533,6 +605,14 @@ export class MissedCallService {
         }
       });
 
+      console.error("[missed-call.automation]", "Missed-call SMS send failed", {
+        callSid: payload.callSid ?? null,
+        callStatus: payload.callStatus ?? null,
+        from: payload.fromPhone,
+        to: payload.toPhone,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
       throw error;
     }
   }
@@ -541,7 +621,17 @@ export class MissedCallService {
     const phoneContext = await this.resolvePhoneNumberContext(payload.toPhone);
 
     if (!phoneContext) {
-      return null;
+      console.warn("Inbound SMS received for unknown Twilio number", {
+        toPhone: payload.toPhone,
+        fromPhone: payload.fromPhone,
+        messageSid: payload.messageSid ?? null
+      });
+
+      return {
+        outcome: "unknown_phone_number",
+        messageSid: payload.messageSid ?? null,
+        automatedReplySent: false
+      };
     }
 
     const fromPhone = normalizePhoneNumber(payload.fromPhone) ?? payload.fromPhone;
@@ -564,7 +654,12 @@ export class MissedCallService {
       });
 
       if (existingMessage) {
-        return existingMessage;
+        return {
+          outcome: "duplicate_message",
+          messageSid: payload.messageSid ?? null,
+          inboundMessageId: existingMessage.id,
+          automatedReplySent: false
+        };
       }
     }
 
@@ -615,11 +710,21 @@ export class MissedCallService {
     });
 
     if (!refreshedLead) {
-      return inboundMessage;
+      return {
+        outcome: "lead_not_found_after_create",
+        messageSid: payload.messageSid ?? null,
+        inboundMessageId: inboundMessage.id,
+        automatedReplySent: false
+      };
     }
 
     if (refreshedLead.smsOptedOut) {
-      return inboundMessage;
+      return {
+        outcome: "lead_opted_out",
+        messageSid: payload.messageSid ?? null,
+        inboundMessageId: inboundMessage.id,
+        automatedReplySent: false
+      };
     }
 
     let replyBody: string;
@@ -639,7 +744,12 @@ export class MissedCallService {
         replyType = "keyword_address";
         break;
       case "stop":
-        return inboundMessage;
+        return {
+          outcome: "stop_keyword",
+          messageSid: payload.messageSid ?? null,
+          inboundMessageId: inboundMessage.id,
+          automatedReplySent: false
+        };
       default:
         replyBody = this.buildFallbackText(phoneContext);
         replyType = "keyword_fallback";
@@ -647,7 +757,7 @@ export class MissedCallService {
     }
 
     try {
-      await this.sendAutomatedSmsReply({
+      const outboundMessage = await this.sendAutomatedSmsReply({
         businessId: phoneContext.businessId,
         locationId: phoneContext.locationId,
         leadId: refreshedLead.id,
@@ -666,10 +776,26 @@ export class MissedCallService {
           lastAutomatedReplyAt: new Date().toISOString()
         }
       });
+
+      return {
+        outcome: "automated_reply_sent",
+        messageSid: payload.messageSid ?? null,
+        inboundMessageId: inboundMessage.id,
+        automatedReplySent: true,
+        automatedReplyType: replyType,
+        automatedReplyProviderMessageId: outboundMessage.providerMessageId,
+        automatedReplyStatus: outboundMessage.status
+      };
     } catch (error) {
       console.error("Inbound keyword auto reply failed", error);
-    }
 
-    return inboundMessage;
+      return {
+        outcome: "automated_reply_failed",
+        messageSid: payload.messageSid ?? null,
+        inboundMessageId: inboundMessage.id,
+        automatedReplySent: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
   }
 }
