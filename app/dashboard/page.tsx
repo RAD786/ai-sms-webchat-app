@@ -2,6 +2,7 @@ import {
   Activity,
   Bot,
   Building2,
+  CircleCheck,
   MessageCircleReply,
   PhoneMissed,
   Sparkles
@@ -12,6 +13,7 @@ import { KpiCard } from "@/components/dashboard/kpi-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { StatusPill } from "@/components/dashboard/status-pill";
 import { PageHeader } from "@/components/ui/page-header";
+import { LocationSetupService } from "@/lib/services/location-setup.service";
 
 function startOfToday() {
   const date = new Date();
@@ -27,12 +29,25 @@ function formatTimestamp(value?: Date | null) {
   return value.toLocaleString();
 }
 
+function getFocusLocationState(states: ReturnType<typeof LocationSetupService.getSetupState>[]) {
+  return states.find((state) => !state.isReady) ?? states[0] ?? null;
+}
+
 export default async function DashboardOverviewPage() {
   const { businessId } = await requireBusinessAccess();
   const today = startOfToday();
 
-  const [missedCallsToday, textsSentToday, newLeadsToday, activeLocations, chatbotLeadsToday, recentCalls, recentMessages, recentLeads] =
-    await Promise.all([
+  const [
+    missedCallsToday,
+    textsSentToday,
+    newLeadsToday,
+    activeLocations,
+    chatbotLeadsToday,
+    recentCalls,
+    recentMessages,
+    recentLeads,
+    setupLocations
+  ] = await Promise.all([
       prisma.call.count({
         where: {
           businessId,
@@ -109,8 +124,24 @@ export default async function DashboardOverviewPage() {
           createdAt: "desc"
         },
         take: 4
+      }),
+      prisma.location.findMany({
+        where: {
+          businessId
+        },
+        include: {
+          phoneNumbers: true,
+          businessHours: true,
+          missedCallRule: true
+        }
       })
     ]);
+
+  const setupStates = setupLocations.map((location) => LocationSetupService.getSetupState(location));
+  const setupSummary = LocationSetupService.summarize(setupStates);
+  const focusLocationState = getFocusLocationState(setupStates);
+  const isBusinessReady =
+    setupSummary.totalLocations > 0 && setupSummary.readyLocations === setupSummary.totalLocations;
 
   const cards = [
     {
@@ -185,6 +216,89 @@ export default async function DashboardOverviewPage() {
         ))}
       </section>
 
+      <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <SectionCard
+          title="System status"
+          description="A compact setup check for missed-call SMS readiness."
+          icon={CircleCheck}
+        >
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-950 p-4 text-white">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-200">
+                  Business
+                </p>
+                <p className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold">
+                  {isBusinessReady ? "Configured" : "Needs setup"}
+                </p>
+              </div>
+              <StatusPill tone={isBusinessReady ? "success" : "warning"}>
+                {setupSummary.readyLocations}/{setupSummary.totalLocations || 0} ready
+              </StatusPill>
+            </div>
+
+            {focusLocationState ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                      Location in focus
+                    </p>
+                    <p className="mt-2 font-semibold text-slate-950">{focusLocationState.locationName}</p>
+                  </div>
+                  <StatusPill tone={focusLocationState.isReady ? "success" : "warning"}>
+                    {focusLocationState.isReady ? "Configured" : "Incomplete"}
+                  </StatusPill>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-slate-600">
+                  {focusLocationState.alerts[0] ?? "This location is fully configured for missed-call SMS."}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Checklist: {focusLocationState.completedCount}/{focusLocationState.totalCount} complete.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+                No locations exist yet. Add a location, assign a Twilio number, and save hours plus message templates before testing missed-call SMS.
+              </div>
+            )}
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Setup checklist"
+          description="What the platform needs before missed-call SMS is fully live."
+          icon={CircleCheck}
+        >
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-semibold text-slate-900">Twilio number assigned</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                The inbound Twilio number must exist in `PhoneNumber` and be linked to the correct location.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-semibold text-slate-900">Business hours saved</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                At least one open window is needed so the app can tell business hours from after-hours.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-semibold text-slate-900">Message templates saved</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Save the missed-call reply text, and the after-hours reply too if after-hours texting is enabled.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-semibold text-slate-900">Location active and bookable</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                The location should be active and have a booking link so keyword replies and setup checks are complete.
+              </p>
+            </div>
+          </div>
+        </SectionCard>
+      </section>
+
       <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
         <SectionCard
           title="Recent activity"
@@ -212,30 +326,46 @@ export default async function DashboardOverviewPage() {
 
         <SectionCard
           title="Platform readiness"
-          description="Live records confirm the shared schema is serving the current SMS channel and future chatbot channel."
-          icon={Sparkles}
+          description="Live records now show whether each location is actually ready for call logging and missed-call texting."
+          icon={CircleCheck}
         >
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+          <div className="space-y-3">
             <div className="rounded-2xl bg-slate-950 p-4 text-white">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-200">
-                SMS channel
+                Live setup
               </p>
               <p className="mt-3 font-[family-name:var(--font-display)] text-xl font-semibold">
-                Active foundation
+                {setupSummary.readyLocations}/{setupSummary.totalLocations || 0} locations ready
               </p>
               <p className="mt-2 text-sm leading-6 text-slate-300">
-                Calls, leads, conversations, and messages are flowing through the shared data model.
+                Ready means the location is active and has a Twilio number, business hours, message template, and booking link configured.
               </p>
             </div>
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-sand p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-800">
-                Chatbot channel
-              </p>
-              <p className="mt-3 font-[family-name:var(--font-display)] text-xl font-semibold text-slate-950">
-                Placeholder ready
-              </p>
+            {setupStates.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-sand p-4">
+                <p className="text-sm leading-6 text-slate-600">
+                  No locations exist yet. Add a location before testing the live Twilio number setup.
+                </p>
+              </div>
+            ) : (
+              setupStates.slice(0, 3).map((state) => (
+                <div key={state.locationId} className="rounded-2xl border border-dashed border-slate-300 bg-sand p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-semibold text-slate-950">{state.locationName}</p>
+                    <StatusPill tone={state.isReady ? "success" : "warning"}>
+                      {state.isReady ? "Ready" : `${state.completedCount}/${state.totalCount}`}
+                    </StatusPill>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    {state.alerts[0] ?? "This location is fully configured for live testing."}
+                  </p>
+                </div>
+              ))
+            )}
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-semibold text-slate-900">Admin hint</p>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                Chatbot leads and messages can land in the same lead and conversation tables without a second dashboard.
+                If a call reaches Twilio but does not appear in the dashboard, the most common cause is that the inbound Twilio number is missing from the phone-number records or assigned to the wrong location.
               </p>
             </div>
           </div>
@@ -244,4 +374,3 @@ export default async function DashboardOverviewPage() {
     </div>
   );
 }
-

@@ -1,29 +1,50 @@
 const NON_DIGIT_REGEX = /\D/g;
+const E164_REGEX = /^\+[1-9]\d{7,14}$/;
 
 export function normalizePhoneNumber(input?: string | null) {
   if (!input) {
     return null;
   }
 
-  const digits = input.replace(NON_DIGIT_REGEX, "");
+  const trimmed = input.trim();
+  const digits = trimmed.replace(NON_DIGIT_REGEX, "");
 
   if (!digits) {
     return null;
   }
 
+  if (trimmed.startsWith("+")) {
+    const normalized = `+${digits}`;
+    return E164_REGEX.test(normalized) ? normalized : null;
+  }
+
   if (digits.length === 11 && digits.startsWith("1")) {
-    return `+${digits}`;
+    const normalized = `+${digits}`;
+    return E164_REGEX.test(normalized) ? normalized : null;
   }
 
   if (digits.length === 10) {
     return `+1${digits}`;
   }
 
-  if (input.trim().startsWith("+")) {
-    return `+${digits}`;
+  return null;
+}
+
+export function isValidE164PhoneNumber(input?: string | null) {
+  const normalized = normalizePhoneNumber(input);
+  return normalized ? E164_REGEX.test(normalized) : false;
+}
+
+export function normalizePhoneNumberOrThrow(input?: string | null) {
+  const normalized = normalizePhoneNumber(input);
+
+  if (!normalized) {
+    throw new Error(
+      "Phone number must be a valid mobile or landline number in E.164 format, such as +15555555555."
+    );
   }
 
-  return `+${digits}`;
+  return normalized;
 }
 
 export function formatPhoneNumber(input?: string | null) {

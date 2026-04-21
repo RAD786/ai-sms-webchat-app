@@ -106,6 +106,12 @@ export class MissedCallService {
   }
 
   static buildBookingLink(phoneContext: Awaited<ReturnType<typeof MissedCallService.resolvePhoneNumberContext>>) {
+    const locationBookingLink = phoneContext?.location?.bookingLink?.trim();
+
+    if (locationBookingLink) {
+      return locationBookingLink;
+    }
+
     const websiteUrl = phoneContext?.location?.business?.websiteUrl;
 
     if (!websiteUrl) {

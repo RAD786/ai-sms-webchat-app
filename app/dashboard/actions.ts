@@ -1,9 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { LeadStatus } from "@prisma/client";
+import { LeadStatus, Prisma } from "@prisma/client";
 import { requireBusinessAccess } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { normalizePhoneNumberOrThrow } from "@/lib/utils/phone";
+import { normalizeUrl } from "@/lib/utils/url";
 
 function getString(formData: FormData, key: string) {
   const value = formData.get(key);
@@ -33,6 +35,98 @@ function slugify(input: string) {
     .slice(0, 48);
 }
 
+function getNormalizedSlug(formData: FormData, key: string, fallback?: string) {
+  const raw = getOptionalString(formData, key) ?? fallback ?? "";
+  const normalized = slugify(raw);
+  return normalized.length > 0 ? normalized : null;
+}
+
+function getNormalizedUrl(formData: FormData, key: string, label: string) {
+  const raw = getOptionalString(formData, key);
+
+  if (!raw) {
+    return null;
+  }
+
+  const normalized = normalizeUrl(raw);
+
+  if (!normalized) {
+    throw new Error(`${label} must be a valid http:// or https:// URL.`);
+  }
+
+  return normalized;
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002"
+  );
+}
+
+async function assertLocationBelongsToBusiness(locationId: string, businessId: string) {
+  const location = await prisma.location.findFirst({
+    where: {
+      id: locationId,
+      businessId
+    },
+    select: {
+      id: true
+    }
+  });
+
+  if (!location) {
+    throw new Error("Location not found.");
+  }
+}
+
+async function syncPrimaryPhoneNumber(args: {
+  businessId: string;
+  phoneNumberId: string;
+  isPrimary: boolean;
+}) {
+  if (!args.isPrimary) {
+    return;
+  }
+
+  await prisma.phoneNumber.updateMany({
+    where: {
+      businessId: args.businessId,
+      id: {
+        not: args.phoneNumberId
+      },
+      isPrimary: true
+    },
+    data: {
+      isPrimary: false
+    }
+  });
+}
+
+export async function updateBusinessSettingsAction(formData: FormData) {
+  const { businessId } = await requireBusinessAccess();
+  const name = getString(formData, "name");
+
+  if (!name) {
+    throw new Error("Business name is required.");
+  }
+
+  await prisma.business.update({
+    where: {
+      id: businessId
+    },
+    data: {
+      name,
+      websiteUrl: getNormalizedUrl(formData, "websiteUrl", "Website URL"),
+      industry: getOptionalString(formData, "industry"),
+      timezone: getString(formData, "timezone") || "America/New_York"
+    }
+  });
+
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/settings");
+}
+
 export async function createLocationAction(formData: FormData) {
   const { businessId } = await requireBusinessAccess();
 
@@ -42,24 +136,33 @@ export async function createLocationAction(formData: FormData) {
     throw new Error("Location name is required.");
   }
 
-  const baseSlug = getOptionalString(formData, "slug") ?? slugify(name);
-  const uniqueSlug = baseSlug ? `${baseSlug}-${Date.now().toString().slice(-5)}` : null;
+  const baseSlug = getNormalizedSlug(formData, "slug", name) ?? `location-${Date.now().toString().slice(-5)}`;
+  const uniqueSlug = `${baseSlug}-${Date.now().toString().slice(-5)}`;
 
-  await prisma.location.create({
-    data: {
-      businessId,
-      name,
-      slug: uniqueSlug,
-      timezone: getString(formData, "timezone") || "America/New_York",
-      addressLine1: getOptionalString(formData, "addressLine1"),
-      addressLine2: getOptionalString(formData, "addressLine2"),
-      city: getOptionalString(formData, "city"),
-      state: getOptionalString(formData, "state"),
-      postalCode: getOptionalString(formData, "postalCode"),
-      country: getString(formData, "country") || "US",
-      isActive: true
+  try {
+    await prisma.location.create({
+      data: {
+        businessId,
+        name,
+        slug: uniqueSlug,
+        bookingLink: getNormalizedUrl(formData, "bookingLink", "Booking link"),
+        timezone: getString(formData, "timezone") || "America/New_York",
+        addressLine1: getOptionalString(formData, "addressLine1"),
+        addressLine2: getOptionalString(formData, "addressLine2"),
+        city: getOptionalString(formData, "city"),
+        state: getOptionalString(formData, "state"),
+        postalCode: getOptionalString(formData, "postalCode"),
+        country: getString(formData, "country") || "US",
+        isActive: true
+      }
+    });
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      throw new Error("A location with that slug already exists for this business.");
     }
-  });
+
+    throw error;
+  }
 
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/locations");
@@ -70,29 +173,44 @@ export async function createLocationAction(formData: FormData) {
 export async function updateLocationAction(formData: FormData) {
   const { businessId } = await requireBusinessAccess();
   const locationId = getString(formData, "locationId");
+  const name = getString(formData, "name");
 
   if (!locationId) {
     throw new Error("Location is required.");
   }
 
-  await prisma.location.updateMany({
-    where: {
-      id: locationId,
-      businessId
-    },
-    data: {
-      name: getString(formData, "name"),
-      slug: getOptionalString(formData, "slug"),
-      timezone: getString(formData, "timezone") || "America/New_York",
-      addressLine1: getOptionalString(formData, "addressLine1"),
-      addressLine2: getOptionalString(formData, "addressLine2"),
-      city: getOptionalString(formData, "city"),
-      state: getOptionalString(formData, "state"),
-      postalCode: getOptionalString(formData, "postalCode"),
-      country: getString(formData, "country") || "US",
-      isActive: getBoolean(formData, "isActive")
+  if (!name) {
+    throw new Error("Location name is required.");
+  }
+
+  await assertLocationBelongsToBusiness(locationId, businessId);
+
+  try {
+    await prisma.location.update({
+      where: {
+        id: locationId
+      },
+      data: {
+        name,
+        slug: getNormalizedSlug(formData, "slug"),
+        bookingLink: getNormalizedUrl(formData, "bookingLink", "Booking link"),
+        timezone: getString(formData, "timezone") || "America/New_York",
+        addressLine1: getOptionalString(formData, "addressLine1"),
+        addressLine2: getOptionalString(formData, "addressLine2"),
+        city: getOptionalString(formData, "city"),
+        state: getOptionalString(formData, "state"),
+        postalCode: getOptionalString(formData, "postalCode"),
+        country: getString(formData, "country") || "US",
+        isActive: getBoolean(formData, "isActive")
+      }
+    });
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      throw new Error("A location with that slug already exists for this business.");
     }
-  });
+
+    throw error;
+  }
 
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/locations");
@@ -240,40 +358,48 @@ export async function updateBusinessHoursAction(formData: FormData) {
 export async function createPhoneNumberAction(formData: FormData) {
   const { businessId } = await requireBusinessAccess();
   const locationId = getOptionalString(formData, "locationId");
-  const phoneNumber = getString(formData, "phoneNumber");
+  const rawPhoneNumber = getString(formData, "phoneNumber");
 
-  if (!phoneNumber) {
+  if (!rawPhoneNumber) {
     throw new Error("Phone number is required.");
   }
 
   if (locationId) {
-    const location = await prisma.location.findFirst({
-      where: {
-        id: locationId,
-        businessId
+    await assertLocationBelongsToBusiness(locationId, businessId);
+  }
+
+  const phoneNumber = normalizePhoneNumberOrThrow(rawPhoneNumber);
+  try {
+    const createdPhoneNumber = await prisma.phoneNumber.create({
+      data: {
+        businessId,
+        locationId,
+        label: getOptionalString(formData, "label"),
+        phoneNumber,
+        twilioSid: getOptionalString(formData, "twilioSid"),
+        voiceEnabled: getBoolean(formData, "voiceEnabled"),
+        smsEnabled: getBoolean(formData, "smsEnabled"),
+        isPrimary: getBoolean(formData, "isPrimary")
       }
     });
 
-    if (!location) {
-      throw new Error("Location not found.");
+    await syncPrimaryPhoneNumber({
+      businessId,
+      phoneNumberId: createdPhoneNumber.id,
+      isPrimary: createdPhoneNumber.isPrimary
+    });
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      throw new Error("That phone number or Twilio SID is already saved in the dashboard.");
     }
+
+    throw error;
   }
 
-  await prisma.phoneNumber.create({
-    data: {
-      businessId,
-      locationId,
-      label: getOptionalString(formData, "label"),
-      phoneNumber,
-      twilioSid: getOptionalString(formData, "twilioSid"),
-      voiceEnabled: getBoolean(formData, "voiceEnabled"),
-      smsEnabled: getBoolean(formData, "smsEnabled"),
-      isPrimary: getBoolean(formData, "isPrimary")
-    }
-  });
-
+  revalidatePath("/dashboard");
   revalidatePath("/dashboard/channels");
   revalidatePath("/dashboard/locations");
+  revalidatePath("/dashboard/settings");
 }
 
 export async function updatePhoneNumberAction(formData: FormData) {
@@ -291,21 +417,45 @@ export async function updatePhoneNumberAction(formData: FormData) {
     throw new Error("Phone number not found.");
   }
 
-  await prisma.phoneNumber.update({
-    where: {
-      id: phone.id
-    },
-    data: {
-      label: getOptionalString(formData, "label"),
-      twilioSid: getOptionalString(formData, "twilioSid"),
-      smsEnabled: getBoolean(formData, "smsEnabled"),
-      voiceEnabled: getBoolean(formData, "voiceEnabled"),
-      isPrimary: getBoolean(formData, "isPrimary")
-    }
-  });
+  const locationId = getOptionalString(formData, "locationId");
 
+  if (locationId) {
+    await assertLocationBelongsToBusiness(locationId, businessId);
+  }
+
+  try {
+    const updatedPhoneNumber = await prisma.phoneNumber.update({
+      where: {
+        id: phone.id
+      },
+      data: {
+        locationId,
+        label: getOptionalString(formData, "label"),
+        phoneNumber: normalizePhoneNumberOrThrow(getString(formData, "phoneNumber")),
+        twilioSid: getOptionalString(formData, "twilioSid"),
+        smsEnabled: getBoolean(formData, "smsEnabled"),
+        voiceEnabled: getBoolean(formData, "voiceEnabled"),
+        isPrimary: getBoolean(formData, "isPrimary")
+      }
+    });
+
+    await syncPrimaryPhoneNumber({
+      businessId,
+      phoneNumberId: updatedPhoneNumber.id,
+      isPrimary: updatedPhoneNumber.isPrimary
+    });
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      throw new Error("That phone number or Twilio SID is already saved in the dashboard.");
+    }
+
+    throw error;
+  }
+
+  revalidatePath("/dashboard");
   revalidatePath("/dashboard/channels");
   revalidatePath("/dashboard/locations");
+  revalidatePath("/dashboard/settings");
 }
 
 export async function updateChatbotSettingsAction(formData: FormData) {

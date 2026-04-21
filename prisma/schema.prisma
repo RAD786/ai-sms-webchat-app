@@ -98,6 +98,7 @@ model Location {
   businessId   String
   name         String
   slug         String?
+  bookingLink  String?
   timezone     String   @default("America/New_York")
   addressLine1 String?
   addressLine2 String?
