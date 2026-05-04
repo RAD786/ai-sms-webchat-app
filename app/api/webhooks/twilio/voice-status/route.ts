@@ -1,4 +1,5 @@
 import { MissedCallService } from "@/lib/services/missed-call-service";
+import { DiagnosticsService } from "@/lib/services/diagnostics.service";
 import { TwilioService } from "@/lib/services/twilio-service";
 
 export const runtime = "nodejs";
@@ -57,12 +58,41 @@ export async function POST(request: Request) {
       signatureValid: isValid
     });
 
+    await DiagnosticsService.record({
+      category: "webhook_voice",
+      eventType: "voice_status_webhook_received",
+      level: "info",
+      message: "Received voice status webhook",
+      fromPhone: payload.fromPhone,
+      toPhone: payload.toPhone,
+      providerCallId: payload.callSid ?? null,
+      metadata: {
+        callStatus: payload.callStatus ?? null,
+        signatureValid: isValid,
+        contentType
+      }
+    });
+
     if (process.env.NODE_ENV === "production" && !isValid) {
       console.warn(LOG_PREFIX, "Rejected request with invalid Twilio signature", {
         callSid: payload.callSid ?? null,
         callStatus: payload.callStatus ?? null,
         from: payload.fromPhone,
         to: payload.toPhone
+      });
+
+      await DiagnosticsService.record({
+        category: "webhook_voice",
+        eventType: "voice_status_webhook_rejected",
+        level: "warning",
+        message: "Rejected voice status webhook because the Twilio signature was invalid",
+        fromPhone: payload.fromPhone,
+        toPhone: payload.toPhone,
+        providerCallId: payload.callSid ?? null,
+        metadata: {
+          reason: "invalid_signature",
+          callStatus: payload.callStatus ?? null
+        }
       });
 
       return xmlResponse(TwilioService.buildEmptyTwimlResponse(), {
@@ -83,6 +113,16 @@ export async function POST(request: Request) {
       outboundSmsFailed: result?.automationStatus === "send_failed"
     });
   } catch (error) {
+    await DiagnosticsService.record({
+      category: "webhook_voice",
+      eventType: "voice_status_webhook_failed",
+      level: "error",
+      message: "Voice status webhook processing failed",
+      metadata: {
+        error: getErrorMessage(error)
+      }
+    });
+
     console.error(LOG_PREFIX, "Voice status webhook processing failed", {
       error: getErrorMessage(error)
     });

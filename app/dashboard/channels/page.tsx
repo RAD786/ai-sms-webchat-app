@@ -63,9 +63,15 @@ export default async function ChannelsPage() {
   const chatbotSettingsByLocationId = new Map(
     chatbotSettings.map((setting) => [setting.locationId, setting])
   );
-  const setupStates = new Map(
-    locations.map((location) => [location.id, LocationSetupService.getSetupState(location)])
-  );
+  const setupStateList = locations.map((location) => LocationSetupService.getSetupState(location));
+  const setupStates = new Map(setupStateList.map((state) => [state.locationId, state]));
+  const readyForSmsLaunchCount = setupStateList.filter(
+    (state) =>
+      state.isReady &&
+      state.missedCallTextingEnabled &&
+      Boolean(state.assignedPhoneNumber?.smsEnabled)
+  ).length;
+  const smsConfiguredCount = setupStateList.filter((state) => state.assignedPhoneNumber?.smsEnabled).length;
 
   return (
     <div className="space-y-8">
@@ -234,7 +240,7 @@ export default async function ChannelsPage() {
 
         <SectionCard
           title="Location channel health"
-          description="Quickly verify that each location has a live number and a usable texting state."
+          description="Quickly verify that each location has a live number, a usable texting state, and enough setup to launch once Twilio registration is approved."
           icon={Phone}
         >
           {locations.length === 0 ? (
@@ -244,8 +250,42 @@ export default async function ChannelsPage() {
             />
           ) : (
             <div className="space-y-4">
+              <div className="rounded-3xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">SMS approval readiness</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      Carrier registration approval is not tracked in-app. If Twilio registration is still pending,
+                      keep the number configured here and treat SMS as waiting on Twilio registration until approval lands.
+                    </p>
+                  </div>
+                  <StatusPill tone={readyForSmsLaunchCount > 0 ? "neutral" : "warning"}>
+                    {readyForSmsLaunchCount > 0 ? "Ready after approval" : "Needs config"}
+                  </StatusPill>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Launch-ready locations</p>
+                    <p className="mt-2 text-2xl font-semibold text-slate-950">
+                      {readyForSmsLaunchCount}/{locations.length}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">SMS-enabled numbers</p>
+                    <p className="mt-2 text-2xl font-semibold text-slate-950">
+                      {smsConfiguredCount}/{locations.length}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               {locations.map((location) => {
                 const setupState = setupStates.get(location.id);
+                const isReadyAfterApproval = Boolean(
+                  setupState?.isReady &&
+                    setupState.missedCallTextingEnabled &&
+                    setupState.assignedPhoneNumber?.smsEnabled
+                );
 
                 return (
                   <article key={location.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
@@ -259,6 +299,9 @@ export default async function ChannelsPage() {
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
+                        <StatusPill tone={isReadyAfterApproval ? "neutral" : "warning"}>
+                          {isReadyAfterApproval ? "Ready after approval" : "Waiting on setup"}
+                        </StatusPill>
                         <StatusPill tone={setupState?.assignedPhoneNumber ? "success" : "warning"}>
                           {setupState?.assignedPhoneNumber ? "Number assigned" : "Missing number"}
                         </StatusPill>
@@ -268,9 +311,11 @@ export default async function ChannelsPage() {
                       </div>
                     </div>
                     <p className="mt-3 text-sm leading-6 text-slate-600">
-                      {setupState?.assignedPhoneNumber
-                        ? "If calls still do not log, verify the number matches the exact Twilio inbound number and that the Twilio webhook points to the current app environment."
-                        : "Assign the live Twilio number to this location before testing call logging or missed-call automations."}
+                      {isReadyAfterApproval
+                        ? "This location is configured for missed-call SMS. Once Twilio registration is approved, make a live missed call and test HOURS, BOOK, ADDRESS, and STOP."
+                        : setupState?.assignedPhoneNumber
+                          ? "If calls still do not log, verify the number matches the exact Twilio inbound number, the Twilio webhook points to the current app environment, and the location checklist is complete."
+                          : "Assign the live Twilio number to this location before testing call logging or missed-call automations."}
                     </p>
                     <div className="mt-4">
                       <Link href="/dashboard/settings" className="text-sm font-semibold text-slate-900">

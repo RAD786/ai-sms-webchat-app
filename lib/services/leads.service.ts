@@ -1,6 +1,7 @@
 import "server-only";
 
 import { ConversationChannel, LeadStatus, Prisma } from "@prisma/client";
+import { DiagnosticsService } from "@/lib/services/diagnostics.service";
 import { prisma } from "@/lib/prisma";
 import { normalizePhoneNumber } from "@/lib/utils/phone";
 
@@ -106,7 +107,7 @@ export class LeadsService {
       });
     }
 
-    return prisma.lead.create({
+    const createdLead = await prisma.lead.create({
       data: {
         businessId: input.businessId,
         locationId: input.locationId ?? null,
@@ -121,6 +122,24 @@ export class LeadsService {
         status: input.status ?? LeadStatus.NEW
       }
     });
+
+    await DiagnosticsService.record({
+      businessId: input.businessId,
+      locationId: input.locationId ?? null,
+      category: "lead_processing",
+      eventType: "lead_created",
+      level: "info",
+      message: "Created new lead during inbound processing",
+      fromPhone: normalizedPhone,
+      metadata: {
+        leadId: createdLead.id,
+        sourceChannel: input.sourceChannel ?? null,
+        sourceDescription: input.sourceDescription ?? null,
+        email: normalizedEmail
+      }
+    });
+
+    return createdLead;
   }
 
   static async updateLead(businessId: string, leadId: string, input: UpdateLeadInput) {

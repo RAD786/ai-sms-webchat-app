@@ -91,6 +91,7 @@ model Business {
   messages      Message[]
   conversations Conversation[]
   appointments  Appointment[]
+  diagnostics   DiagnosticEvent[]
 }
 
 model Location {
@@ -120,9 +121,34 @@ model Location {
   messages        Message[]
   conversations   Conversation[]
   appointments    Appointment[]
+  diagnostics     DiagnosticEvent[]
 
   @@unique([businessId, slug])
   @@index([businessId])
+}
+
+model DiagnosticEvent {
+  id                String   @id @default(cuid())
+  businessId        String?
+  locationId        String?
+  category          String
+  eventType         String
+  level             String
+  message           String
+  fromPhone         String?
+  toPhone           String?
+  providerCallId    String?
+  providerMessageId String?
+  metadata          Json?
+  createdAt         DateTime @default(now())
+
+  business Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, createdAt])
+  @@index([eventType, createdAt])
+  @@index([category, createdAt])
+  @@index([locationId, createdAt])
 }
 
 model PhoneNumber {

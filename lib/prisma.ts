@@ -6,6 +6,25 @@ declare global {
 }
 
 function createPrismaClient() {
+  const databaseUrl = process.env.DATABASE_URL ?? "";
+  const directUrl = process.env.DIRECT_URL ?? "";
+
+  if (process.env.NODE_ENV !== "production") {
+    if (databaseUrl.includes("pooler.supabase.com") && !databaseUrl.includes("pgbouncer=true")) {
+      console.warn(
+        "[prisma]",
+        "DATABASE_URL appears to use the Supabase pooler without `pgbouncer=true`. Recopy the pooled connection string from Supabase."
+      );
+    }
+
+    if (directUrl.includes("pooler.supabase.com")) {
+      console.warn(
+        "[prisma]",
+        "DIRECT_URL is pointing at the Supabase pooler host. DIRECT_URL should use the direct database host like `db.<project-ref>.supabase.co:5432`."
+      );
+    }
+  }
+
   return new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"]
   });
@@ -19,4 +38,3 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 export default prisma;
-

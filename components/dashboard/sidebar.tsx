@@ -3,15 +3,19 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BarChart3, ChevronRight } from "lucide-react";
-import { dashboardNavigation } from "@/lib/navigation";
+import { getDashboardNavigation } from "@/lib/navigation";
 import { cn } from "@/lib/utils/cn";
 
 type SidebarProps = {
   onNavigate?: () => void;
+  isAdmin?: boolean;
 };
 
-export function Sidebar({ onNavigate }: SidebarProps) {
+export function Sidebar({ onNavigate, isAdmin = false }: SidebarProps) {
   const pathname = usePathname();
+  const navigation = getDashboardNavigation({
+    includeDiagnostics: isAdmin
+  });
 
   return (
     <aside className="flex h-full flex-col rounded-[2rem] border border-slate-200 bg-slate-950 p-6 text-white shadow-soft">
@@ -26,7 +30,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
       </div>
 
       <nav className="mt-10 space-y-2">
-        {dashboardNavigation.map((item) => {
+        {navigation.map((item) => {
           const Icon = item.icon;
           const isActive =
             pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
@@ -68,7 +72,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
       <div className="mt-4 rounded-3xl border border-brand-500/20 bg-brand-500/10 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-100">Current focus</p>
         <p className="mt-3 text-sm leading-6 text-brand-50">
-          Missed-call-to-SMS is the first production feature. The shell is already prepared for chatbot configuration and reporting.
+          Missed-call-to-SMS is the first production feature. Diagnostics now surface unmatched numbers, send failures, and recent webhook processing.
         </p>
       </div>
     </aside>

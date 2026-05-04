@@ -13,9 +13,10 @@ type AppShellProps = {
     name: string;
     email: string;
   };
+  isAdmin?: boolean;
 };
 
-export function AppShell({ children, user }: AppShellProps) {
+export function AppShell({ children, user, isAdmin = false }: AppShellProps) {
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   return (
@@ -35,7 +36,7 @@ export function AppShell({ children, user }: AppShellProps) {
             isMobileNavOpen ? "translate-x-0" : "-translate-x-[115%]"
           )}
         >
-          <Sidebar onNavigate={() => setIsMobileNavOpen(false)} />
+          <Sidebar onNavigate={() => setIsMobileNavOpen(false)} isAdmin={isAdmin} />
         </div>
 
         <div className="min-w-0 flex-1 rounded-[2rem] border border-white/80 bg-white/80 p-4 shadow-soft backdrop-blur lg:p-6">
@@ -79,10 +80,10 @@ export function AppShell({ children, user }: AppShellProps) {
                 </p>
               </div>
               <Link
-                href="/dashboard/channels"
+                href={isAdmin ? "/dashboard/diagnostics" : "/dashboard/channels"}
                 className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-slate-100"
               >
-                Manage channels
+                {isAdmin ? "Open diagnostics" : "Manage channels"}
               </Link>
             </div>
           </div>

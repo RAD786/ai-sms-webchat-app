@@ -1,6 +1,7 @@
 import "server-only";
 
 import twilio from "twilio";
+import { DiagnosticsService } from "@/lib/services/diagnostics.service";
 import { env } from "@/lib/env";
 
 export type TwilioVoiceWebhookPayload = {
@@ -81,6 +82,13 @@ export class TwilioService {
     to: string;
     body: string;
     from?: string;
+    diagnostics?: {
+      businessId?: string | null;
+      locationId?: string | null;
+      providerCallId?: string | null;
+      providerMessageId?: string | null;
+      context?: string;
+    };
   }) {
     const client = this.getClient();
     const from = args.from ?? env.TWILIO_PHONE_NUMBER;
@@ -89,6 +97,23 @@ export class TwilioService {
       from,
       to: args.to,
       bodyLength: args.body.length
+    });
+
+    await DiagnosticsService.record({
+      businessId: args.diagnostics?.businessId,
+      locationId: args.diagnostics?.locationId,
+      category: "sms_processing",
+      eventType: "outbound_sms_attempt",
+      level: "info",
+      message: "Attempting outbound SMS send",
+      fromPhone: from,
+      toPhone: args.to,
+      providerCallId: args.diagnostics?.providerCallId,
+      providerMessageId: args.diagnostics?.providerMessageId,
+      metadata: {
+        context: args.diagnostics?.context ?? "unknown",
+        bodyLength: args.body.length
+      }
     });
 
     try {
@@ -105,12 +130,46 @@ export class TwilioService {
         to: message.to ?? args.to
       });
 
+      await DiagnosticsService.record({
+        businessId: args.diagnostics?.businessId,
+        locationId: args.diagnostics?.locationId,
+        category: "sms_processing",
+        eventType: "outbound_sms_accepted",
+        level: "info",
+        message: "Twilio accepted outbound SMS",
+        fromPhone: message.from ?? from,
+        toPhone: message.to ?? args.to,
+        providerCallId: args.diagnostics?.providerCallId,
+        providerMessageId: message.sid,
+        metadata: {
+          context: args.diagnostics?.context ?? "unknown",
+          status: message.status ?? null
+        }
+      });
+
       return message;
     } catch (error) {
       console.error("[twilio.sms.send]", "Twilio SMS send failed", {
         error: error instanceof Error ? error.message : String(error),
         from,
         to: args.to
+      });
+
+      await DiagnosticsService.record({
+        businessId: args.diagnostics?.businessId,
+        locationId: args.diagnostics?.locationId,
+        category: "sms_processing",
+        eventType: "outbound_sms_failed",
+        level: "error",
+        message: "Outbound SMS send failed",
+        fromPhone: from,
+        toPhone: args.to,
+        providerCallId: args.diagnostics?.providerCallId,
+        providerMessageId: args.diagnostics?.providerMessageId,
+        metadata: {
+          context: args.diagnostics?.context ?? "unknown",
+          error: error instanceof Error ? error.message : String(error)
+        }
       });
 
       throw error;

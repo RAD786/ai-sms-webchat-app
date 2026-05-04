@@ -1,4 +1,5 @@
 import { MissedCallService } from "@/lib/services/missed-call-service";
+import { DiagnosticsService } from "@/lib/services/diagnostics.service";
 import { TwilioService } from "@/lib/services/twilio-service";
 
 export const runtime = "nodejs";
@@ -68,9 +69,37 @@ export async function POST(request: Request) {
       signatureValid: isValid
     });
 
+    await DiagnosticsService.record({
+      category: "webhook_voice",
+      eventType: "voice_webhook_received",
+      level: "info",
+      message: "Received incoming voice webhook",
+      fromPhone: payload.fromPhone,
+      toPhone: payload.toPhone,
+      providerCallId: payload.callSid ?? null,
+      metadata: {
+        callStatus: payload.callStatus ?? null,
+        signatureValid: isValid,
+        contentType
+      }
+    });
+
     if (process.env.NODE_ENV === "production" && !isValid) {
       console.warn(LOG_PREFIX, "Rejected request with invalid Twilio signature", {
         callSid: payload.callSid ?? null
+      });
+
+      await DiagnosticsService.record({
+        category: "webhook_voice",
+        eventType: "voice_webhook_rejected",
+        level: "warning",
+        message: "Rejected voice webhook because the Twilio signature was invalid",
+        fromPhone: payload.fromPhone,
+        toPhone: payload.toPhone,
+        providerCallId: payload.callSid ?? null,
+        metadata: {
+          reason: "invalid_signature"
+        }
       });
 
       return xmlResponse(TwilioService.buildEmptyTwimlResponse(), {
@@ -86,6 +115,16 @@ export async function POST(request: Request) {
       callRecordId: callRecord?.id ?? null
     });
   } catch (error) {
+    await DiagnosticsService.record({
+      category: "webhook_voice",
+      eventType: "voice_webhook_failed",
+      level: "error",
+      message: "Voice webhook processing failed",
+      metadata: {
+        error: getErrorMessage(error)
+      }
+    });
+
     console.error(LOG_PREFIX, "Voice webhook processing failed", {
       error: getErrorMessage(error)
     });

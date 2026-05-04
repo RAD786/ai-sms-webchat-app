@@ -1,4 +1,5 @@
 import { MissedCallService } from "@/lib/services/missed-call-service";
+import { DiagnosticsService } from "@/lib/services/diagnostics.service";
 import { TwilioService } from "@/lib/services/twilio-service";
 
 export const runtime = "nodejs";
@@ -57,9 +58,37 @@ export async function POST(request: Request) {
       signatureValid: isValid
     });
 
+    await DiagnosticsService.record({
+      category: "webhook_sms",
+      eventType: "sms_webhook_received",
+      level: "info",
+      message: "Received incoming SMS webhook",
+      fromPhone: payload.fromPhone,
+      toPhone: payload.toPhone,
+      providerMessageId: payload.messageSid ?? null,
+      metadata: {
+        signatureValid: isValid,
+        bodyLength: payload.body.length,
+        contentType
+      }
+    });
+
     if (process.env.NODE_ENV === "production" && !isValid) {
       console.warn(LOG_PREFIX, "Rejected request with invalid Twilio signature", {
         messageSid: payload.messageSid ?? null
+      });
+
+      await DiagnosticsService.record({
+        category: "webhook_sms",
+        eventType: "sms_webhook_rejected",
+        level: "warning",
+        message: "Rejected SMS webhook because the Twilio signature was invalid",
+        fromPhone: payload.fromPhone,
+        toPhone: payload.toPhone,
+        providerMessageId: payload.messageSid ?? null,
+        metadata: {
+          reason: "invalid_signature"
+        }
       });
 
       return xmlResponse(TwilioService.buildEmptyTwimlResponse(), {
@@ -71,6 +100,16 @@ export async function POST(request: Request) {
 
     console.info(LOG_PREFIX, "Inbound SMS processed", result);
   } catch (error) {
+    await DiagnosticsService.record({
+      category: "webhook_sms",
+      eventType: "sms_webhook_failed",
+      level: "error",
+      message: "SMS webhook processing failed",
+      metadata: {
+        error: getErrorMessage(error)
+      }
+    });
+
     console.error(LOG_PREFIX, "SMS webhook processing failed", {
       error: getErrorMessage(error)
     });

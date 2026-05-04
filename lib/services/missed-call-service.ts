@@ -3,6 +3,7 @@ import "server-only";
 import { CallStatus, ConversationChannel, MessageStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { BusinessHoursService } from "@/lib/services/business-hours.service";
+import { DiagnosticsService } from "@/lib/services/diagnostics.service";
 import { LeadsService } from "@/lib/services/leads.service";
 import { MessagesService } from "@/lib/services/messages.service";
 import {
@@ -72,15 +73,29 @@ function findIntent(body: string) {
   return "fallback" as const;
 }
 
+type ResolvedPhoneContext = Awaited<ReturnType<typeof MissedCallService.resolvePhoneNumberContext>>;
+
+type SmsKeywordIntent = ReturnType<typeof findIntent>;
+
 export class MissedCallService {
   static async resolvePhoneNumberContext(toPhone: string) {
     const normalizedToPhone = normalizePhoneNumber(toPhone);
 
     if (!normalizedToPhone) {
+      await DiagnosticsService.record({
+        category: "phone_matching",
+        eventType: "phone_number_unmatched",
+        level: "warning",
+        message: "Incoming webhook used an invalid or unnormalized destination number",
+        toPhone,
+        metadata: {
+          normalizedToPhone: null
+        }
+      });
       return null;
     }
 
-    return prisma.phoneNumber.findFirst({
+    const phoneContext = await prisma.phoneNumber.findFirst({
       where: {
         phoneNumber: normalizedToPhone
       },
@@ -103,9 +118,58 @@ export class MissedCallService {
         }
       }
     });
+
+    if (!phoneContext) {
+      await DiagnosticsService.record({
+        category: "phone_matching",
+        eventType: "phone_number_unmatched",
+        level: "warning",
+        message: "Incoming webhook destination number did not match any configured phone number",
+        toPhone: normalizedToPhone,
+        metadata: {
+          normalizedToPhone
+        }
+      });
+
+      return null;
+    }
+
+    await DiagnosticsService.record({
+      businessId: phoneContext.businessId,
+      locationId: phoneContext.locationId,
+      category: "phone_matching",
+      eventType: "phone_number_matched",
+      level: "info",
+      message: "Matched incoming webhook to configured phone number",
+      toPhone: normalizedToPhone,
+      metadata: {
+        phoneNumberId: phoneContext.id,
+        locationName: phoneContext.location?.name ?? null,
+        locationMatched: Boolean(phoneContext.locationId)
+      }
+    });
+
+    await DiagnosticsService.record({
+      businessId: phoneContext.businessId,
+      locationId: phoneContext.locationId,
+      category: "location_matching",
+      eventType: phoneContext.locationId ? "location_matched" : "location_unassigned",
+      level: phoneContext.locationId ? "info" : "warning",
+      message: phoneContext.locationId
+        ? "Matched incoming webhook to location"
+        : "Matched phone number but no location is assigned to it",
+      toPhone: normalizedToPhone,
+      metadata: {
+        phoneNumberId: phoneContext.id,
+        locationId: phoneContext.locationId,
+        locationName: phoneContext.location?.name ?? null
+      }
+    });
+
+    return phoneContext;
   }
 
-  static buildBookingLink(phoneContext: Awaited<ReturnType<typeof MissedCallService.resolvePhoneNumberContext>>) {
+  static getBookingLinkUrl(phoneContext: ResolvedPhoneContext) {
     const locationBookingLink = phoneContext?.location?.bookingLink?.trim();
 
     if (locationBookingLink) {
@@ -115,13 +179,27 @@ export class MissedCallService {
     const websiteUrl = phoneContext?.location?.business?.websiteUrl;
 
     if (!websiteUrl) {
-      return "our website";
+      return null;
     }
 
     return `${websiteUrl.replace(/\/$/, "")}/book`;
   }
 
-  static buildAddressText(phoneContext: NonNullable<Awaited<ReturnType<typeof MissedCallService.resolvePhoneNumberContext>>>) {
+  static buildBookingLink(phoneContext: ResolvedPhoneContext) {
+    return this.getBookingLinkUrl(phoneContext) ?? "our website";
+  }
+
+  static buildBookReplyText(phoneContext: NonNullable<ResolvedPhoneContext>) {
+    const bookingLink = this.getBookingLinkUrl(phoneContext);
+
+    if (!bookingLink) {
+      return "We can help you schedule. Reply here and our team will send booking options shortly.";
+    }
+
+    return `You can book here: ${bookingLink}`;
+  }
+
+  static buildAddressText(phoneContext: NonNullable<ResolvedPhoneContext>) {
     const location = phoneContext.location;
 
     if (!location) {
@@ -136,10 +214,14 @@ export class MissedCallService {
       location.postalCode
     ].filter(Boolean);
 
-    return parts.length > 0 ? parts.join(", ") : "Our team will share the address shortly.";
+    if (parts.length === 0) {
+      return "Our team will share the address shortly.";
+    }
+
+    return `${location.name} is located at ${parts.join(", ")}.`;
   }
 
-  static buildHoursText(phoneContext: NonNullable<Awaited<ReturnType<typeof MissedCallService.resolvePhoneNumberContext>>>) {
+  static buildHoursText(phoneContext: NonNullable<ResolvedPhoneContext>) {
     const location = phoneContext.location;
 
     if (!location) {
@@ -151,13 +233,55 @@ export class MissedCallService {
       timezone: location.timezone
     });
 
-    return BusinessHoursService.formatHoursForDay(openStatus.activeWindow, openStatus.currentDayOfWeek);
+    const formattedHours = BusinessHoursService.formatHoursForDay(
+      openStatus.activeWindow,
+      openStatus.currentDayOfWeek
+    );
+
+    return `${location.name} hours: ${formattedHours}.`;
   }
 
-  static buildFallbackText(phoneContext: Awaited<ReturnType<typeof MissedCallService.resolvePhoneNumberContext>>) {
-    const bookingLink = this.buildBookingLink(phoneContext);
+  static buildFallbackText(phoneContext: ResolvedPhoneContext) {
+    const bookingLink = this.getBookingLinkUrl(phoneContext);
+
+    if (!bookingLink) {
+      return "Thanks for reaching out. A team member will follow up with you shortly.";
+    }
 
     return `Thanks for reaching out. A team member will follow up soon. You can also book here: ${bookingLink}`;
+  }
+
+  static async recordSmsKeywordEvent(args: {
+    businessId: string;
+    locationId?: string | null;
+    fromPhone: string;
+    toPhone: string;
+    providerMessageId?: string | null;
+    leadId: string;
+    intent: SmsKeywordIntent;
+    keyword: string;
+    eventType: string;
+    message: string;
+    level?: "info" | "warning" | "error";
+    metadata?: Record<string, unknown>;
+  }) {
+    await DiagnosticsService.record({
+      businessId: args.businessId,
+      locationId: args.locationId,
+      category: "sms_processing",
+      eventType: args.eventType,
+      level: args.level ?? "info",
+      message: args.message,
+      fromPhone: args.fromPhone,
+      toPhone: args.toPhone,
+      providerMessageId: args.providerMessageId ?? null,
+      metadata: {
+        leadId: args.leadId,
+        intent: args.intent,
+        keyword: args.keyword,
+        ...(args.metadata ?? {})
+      }
+    });
   }
 
   static async sendAutomatedSmsReply(args: {
@@ -175,7 +299,12 @@ export class MissedCallService {
     const sentMessage = await TwilioService.sendSms({
       to: args.toAddress,
       body: args.body,
-      from: args.fromAddress
+      from: args.fromAddress,
+      diagnostics: {
+        businessId: args.businessId,
+        locationId: args.locationId,
+        context: "inbound_keyword_reply"
+      }
     });
 
     return MessagesService.recordOutboundMessage({
@@ -200,6 +329,17 @@ export class MissedCallService {
     const phoneContext = await this.resolvePhoneNumberContext(payload.toPhone);
 
     if (!phoneContext || !payload.callSid) {
+      await DiagnosticsService.record({
+        businessId: phoneContext?.businessId ?? null,
+        locationId: phoneContext?.locationId ?? null,
+        category: "call_processing",
+        eventType: "call_skipped",
+        level: "warning",
+        message: "Skipped incoming call persistence because phone context or CallSid was missing",
+        fromPhone: payload.fromPhone,
+        toPhone: payload.toPhone,
+        providerCallId: payload.callSid ?? null
+      });
       return null;
     }
 
@@ -207,38 +347,64 @@ export class MissedCallService {
     const toPhone = normalizePhoneNumber(payload.toPhone) ?? payload.toPhone;
     const derivedStatus = mapTwilioCallStatus(payload.callStatus, payload.callDuration);
     const now = new Date();
-
-    return prisma.call.upsert({
+    const existingCall = await prisma.call.findUnique({
       where: {
         providerCallId: payload.callSid
-      },
-      update: {
-        fromPhone,
-        toPhone,
-        status: derivedStatus,
-        receivedAt: now,
-        metadata: {
-          twilioCallStatus: payload.callStatus ?? null,
-          direction: payload.direction ?? null,
-          answeredBy: payload.answeredBy ?? null
-        }
-      },
-      create: {
-        businessId: phoneContext.businessId,
-        locationId: phoneContext.locationId,
-        phoneNumberId: phoneContext.id,
-        providerCallId: payload.callSid,
-        fromPhone,
-        toPhone,
-        status: derivedStatus,
-        receivedAt: now,
-        metadata: {
-          twilioCallStatus: payload.callStatus ?? null,
-          direction: payload.direction ?? null,
-          answeredBy: payload.answeredBy ?? null
-        }
       }
     });
+
+    const persistedCall = existingCall
+      ? await prisma.call.update({
+          where: {
+            id: existingCall.id
+          },
+          data: {
+            fromPhone,
+            toPhone,
+            status: derivedStatus,
+            receivedAt: now,
+            metadata: {
+              twilioCallStatus: payload.callStatus ?? null,
+              direction: payload.direction ?? null,
+              answeredBy: payload.answeredBy ?? null
+            }
+          }
+        })
+      : await prisma.call.create({
+          data: {
+            businessId: phoneContext.businessId,
+            locationId: phoneContext.locationId,
+            phoneNumberId: phoneContext.id,
+            providerCallId: payload.callSid,
+            fromPhone,
+            toPhone,
+            status: derivedStatus,
+            receivedAt: now,
+            metadata: {
+              twilioCallStatus: payload.callStatus ?? null,
+              direction: payload.direction ?? null,
+              answeredBy: payload.answeredBy ?? null
+            }
+          }
+        });
+
+    await DiagnosticsService.record({
+      businessId: persistedCall.businessId,
+      locationId: persistedCall.locationId,
+      category: "call_processing",
+      eventType: existingCall ? "call_updated" : "call_created",
+      level: "info",
+      message: existingCall ? "Updated existing call record from voice webhook" : "Created call record from voice webhook",
+      fromPhone: persistedCall.fromPhone,
+      toPhone: persistedCall.toPhone,
+      providerCallId: persistedCall.providerCallId,
+      metadata: {
+        callId: persistedCall.id,
+        status: persistedCall.status
+      }
+    });
+
+    return persistedCall;
   }
 
   static logCallAutomationEvent(
@@ -285,6 +451,14 @@ export class MissedCallService {
   static async processCallStatus(payload: TwilioVoiceWebhookPayload) {
     if (!payload.callSid) {
       this.logCallAutomationEvent("Skipping call status processing without CallSid", payload);
+      await DiagnosticsService.record({
+        category: "call_processing",
+        eventType: "call_processing_skipped",
+        level: "warning",
+        message: "Skipped call status processing because CallSid was missing",
+        fromPhone: payload.fromPhone,
+        toPhone: payload.toPhone
+      });
       return null;
     }
 
@@ -310,6 +484,15 @@ export class MissedCallService {
 
     if (!call) {
       this.logCallAutomationEvent("No call record found after initial log", payload);
+      await DiagnosticsService.record({
+        category: "call_processing",
+        eventType: "call_processing_missing_record",
+        level: "warning",
+        message: "No call record was found after initial voice webhook logging",
+        fromPhone: payload.fromPhone,
+        toPhone: payload.toPhone,
+        providerCallId: payload.callSid
+      });
       return null;
     }
 
@@ -352,9 +535,41 @@ export class MissedCallService {
       automationStatus: updatedCall.automationStatus
     });
 
+    await DiagnosticsService.record({
+      businessId: updatedCall.businessId,
+      locationId: updatedCall.locationId,
+      category: "call_processing",
+      eventType: "call_status_processed",
+      level: "info",
+      message: "Processed voice status update",
+      fromPhone: updatedCall.fromPhone,
+      toPhone: updatedCall.toPhone,
+      providerCallId: updatedCall.providerCallId,
+      metadata: {
+        callId: updatedCall.id,
+        status: updatedCall.status,
+        automationStatus: updatedCall.automationStatus
+      }
+    });
+
     if (nextStatus !== CallStatus.MISSED) {
       this.logCallAutomationEvent("Call is not missed; automation will not fire", payload, {
         internalStatus: updatedCall.status
+      });
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_send_skipped",
+        level: "info",
+        message: "Skipped SMS automation because the call was not missed",
+        fromPhone: updatedCall.fromPhone,
+        toPhone: updatedCall.toPhone,
+        providerCallId: updatedCall.providerCallId,
+        metadata: {
+          reason: "not_missed",
+          status: updatedCall.status
+        }
       });
       return updatedCall;
     }
@@ -362,6 +577,21 @@ export class MissedCallService {
     if (!updatedCall.location?.missedCallRule?.isEnabled) {
       this.logCallAutomationEvent("Missed-call rule is disabled", payload, {
         callId: updatedCall.id
+      });
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_send_skipped",
+        level: "warning",
+        message: "Skipped missed-call SMS because the rule is disabled",
+        fromPhone: updatedCall.fromPhone,
+        toPhone: updatedCall.toPhone,
+        providerCallId: updatedCall.providerCallId,
+        metadata: {
+          reason: "rule_disabled",
+          callId: updatedCall.id
+        }
       });
       return prisma.call.update({
         where: { id: updatedCall.id },
@@ -375,6 +605,21 @@ export class MissedCallService {
       this.logCallAutomationEvent("Automation SMS already sent for this call", payload, {
         callId: updatedCall.id
       });
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_send_skipped",
+        level: "info",
+        message: "Skipped missed-call SMS because a send already exists for this call",
+        fromPhone: updatedCall.fromPhone,
+        toPhone: updatedCall.toPhone,
+        providerCallId: updatedCall.providerCallId,
+        metadata: {
+          reason: "already_sent",
+          callId: updatedCall.id
+        }
+      });
       return prisma.call.update({
         where: { id: updatedCall.id },
         data: {
@@ -387,6 +632,22 @@ export class MissedCallService {
       this.logCallAutomationEvent("Twilio number does not have SMS enabled", payload, {
         callId: updatedCall.id,
         phoneNumberId: updatedCall.phoneNumberId
+      });
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_send_skipped",
+        level: "warning",
+        message: "Skipped missed-call SMS because the assigned number is not SMS enabled",
+        fromPhone: updatedCall.fromPhone,
+        toPhone: updatedCall.toPhone,
+        providerCallId: updatedCall.providerCallId,
+        metadata: {
+          reason: "sms_disabled",
+          callId: updatedCall.id,
+          phoneNumberId: updatedCall.phoneNumberId
+        }
       });
       return prisma.call.update({
         where: { id: updatedCall.id },
@@ -402,6 +663,22 @@ export class MissedCallService {
       this.logCallAutomationEvent("Duplicate recent missed-call automation detected", payload, {
         callId: updatedCall.id,
         duplicateCallId: duplicateCall.id
+      });
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_send_skipped",
+        level: "info",
+        message: "Skipped missed-call SMS because a recent duplicate automation was found",
+        fromPhone: updatedCall.fromPhone,
+        toPhone: updatedCall.toPhone,
+        providerCallId: updatedCall.providerCallId,
+        metadata: {
+          reason: "duplicate_recent",
+          callId: updatedCall.id,
+          duplicateCallId: duplicateCall.id
+        }
       });
       return prisma.call.update({
         where: { id: updatedCall.id },
@@ -436,6 +713,22 @@ export class MissedCallService {
       this.logCallAutomationEvent("Lead has opted out of SMS", payload, {
         callId: updatedCall.id,
         leadId: hydratedLead.id
+      });
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_send_skipped",
+        level: "info",
+        message: "Skipped missed-call SMS because the lead is opted out",
+        fromPhone: updatedCall.fromPhone,
+        toPhone: updatedCall.toPhone,
+        providerCallId: updatedCall.providerCallId,
+        metadata: {
+          reason: "lead_opted_out",
+          callId: updatedCall.id,
+          leadId: hydratedLead.id
+        }
       });
       return prisma.call.update({
         where: { id: updatedCall.id },
@@ -486,6 +779,22 @@ export class MissedCallService {
         callId: updatedCall.id,
         isOpen: businessHoursStatus?.isOpen ?? null
       });
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_send_skipped",
+        level: "warning",
+        message: "Skipped missed-call SMS because no template was configured for the current hours state",
+        fromPhone: updatedCall.fromPhone,
+        toPhone: updatedCall.toPhone,
+        providerCallId: updatedCall.providerCallId,
+        metadata: {
+          reason: "outside_hours_no_reply",
+          callId: updatedCall.id,
+          isOpen: businessHoursStatus?.isOpen ?? null
+        }
+      });
       return prisma.call.update({
         where: { id: updatedCall.id },
         data: {
@@ -513,6 +822,21 @@ export class MissedCallService {
       this.logCallAutomationEvent("Call could not be claimed for SMS send", payload, {
         callId: updatedCall.id
       });
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_send_skipped",
+        level: "warning",
+        message: "Skipped missed-call SMS because the call could not be claimed for sending",
+        fromPhone: updatedCall.fromPhone,
+        toPhone: updatedCall.toPhone,
+        providerCallId: updatedCall.providerCallId,
+        metadata: {
+          reason: "claim_failed",
+          callId: updatedCall.id
+        }
+      });
       return prisma.call.findUnique({
         where: {
           id: updatedCall.id
@@ -537,6 +861,23 @@ export class MissedCallService {
         freshCallFound: Boolean(freshCall),
         smsSent: freshCall?.smsSent ?? null
       });
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_send_skipped",
+        level: "info",
+        message: "Skipped missed-call SMS because the call state changed before send",
+        fromPhone: updatedCall.fromPhone,
+        toPhone: updatedCall.toPhone,
+        providerCallId: updatedCall.providerCallId,
+        metadata: {
+          reason: "fresh_call_missing_or_sent",
+          callId: updatedCall.id,
+          freshCallFound: Boolean(freshCall),
+          smsSent: freshCall?.smsSent ?? null
+        }
+      });
       return freshCall;
     }
 
@@ -551,7 +892,13 @@ export class MissedCallService {
       const sentMessage = await TwilioService.sendSms({
         to: updatedCall.fromPhone,
         body: messageBody,
-        from: updatedCall.phoneNumber?.phoneNumber ?? undefined
+        from: updatedCall.phoneNumber?.phoneNumber ?? undefined,
+        diagnostics: {
+          businessId: updatedCall.businessId,
+          locationId: updatedCall.locationId,
+          providerCallId: updatedCall.providerCallId,
+          context: "missed_call_automation"
+        }
       });
 
       await MessagesService.recordOutboundMessage({
@@ -598,6 +945,24 @@ export class MissedCallService {
         outboundMessageStatus: sentMessage.status ?? null
       });
 
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_sms_sent",
+        level: "info",
+        message: "Sent missed-call SMS successfully",
+        fromPhone: updatedCall.phoneNumber?.phoneNumber ?? updatedCall.toPhone,
+        toPhone: updatedCall.fromPhone,
+        providerCallId: updatedCall.providerCallId,
+        providerMessageId: sentMessage.sid,
+        metadata: {
+          callId: updatedCall.id,
+          replyType,
+          outboundMessageStatus: sentMessage.status ?? null
+        }
+      });
+
       return completedCall;
     } catch (error) {
       await prisma.call.update({
@@ -619,6 +984,22 @@ export class MissedCallService {
         error: error instanceof Error ? error.message : String(error)
       });
 
+      await DiagnosticsService.record({
+        businessId: updatedCall.businessId,
+        locationId: updatedCall.locationId,
+        category: "call_processing",
+        eventType: "missed_call_sms_failed",
+        level: "error",
+        message: "Failed to send missed-call SMS",
+        fromPhone: updatedCall.phoneNumber?.phoneNumber ?? updatedCall.toPhone,
+        toPhone: updatedCall.fromPhone,
+        providerCallId: updatedCall.providerCallId,
+        metadata: {
+          callId: updatedCall.id,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
+
       throw error;
     }
   }
@@ -631,6 +1012,16 @@ export class MissedCallService {
         toPhone: payload.toPhone,
         fromPhone: payload.fromPhone,
         messageSid: payload.messageSid ?? null
+      });
+
+      await DiagnosticsService.record({
+        category: "sms_processing",
+        eventType: "sms_unmatched_phone_number",
+        level: "warning",
+        message: "Inbound SMS used an unknown Twilio destination number",
+        fromPhone: payload.fromPhone,
+        toPhone: payload.toPhone,
+        providerMessageId: payload.messageSid ?? null
       });
 
       return {
@@ -660,6 +1051,21 @@ export class MissedCallService {
       });
 
       if (existingMessage) {
+        await DiagnosticsService.record({
+          businessId: phoneContext.businessId,
+          locationId: phoneContext.locationId,
+          category: "sms_processing",
+          eventType: "sms_duplicate_ignored",
+          level: "info",
+          message: "Skipped duplicate inbound SMS message",
+          fromPhone,
+          toPhone,
+          providerMessageId: payload.messageSid ?? null,
+          metadata: {
+            existingMessageId: existingMessage.id
+          }
+        });
+
         return {
           outcome: "duplicate_message",
           messageSid: payload.messageSid ?? null,
@@ -672,8 +1078,39 @@ export class MissedCallService {
     const keyword = getKeyword(body);
     const intent = findIntent(body);
 
+    await this.recordSmsKeywordEvent({
+      businessId: phoneContext.businessId,
+      locationId: phoneContext.locationId,
+      fromPhone,
+      toPhone,
+      providerMessageId: payload.messageSid ?? null,
+      leadId: lead.id,
+      intent,
+      keyword,
+      eventType: "sms_keyword_received",
+      message: "Processed inbound SMS keyword or freeform reply",
+      metadata: {
+        bodyLength: body.length
+      }
+    });
+
     if (STOP_KEYWORDS.has(keyword)) {
       await LeadsService.setSmsOptOut(phoneContext.businessId, lead.id, true);
+      await this.recordSmsKeywordEvent({
+        businessId: phoneContext.businessId,
+        locationId: phoneContext.locationId,
+        fromPhone,
+        toPhone,
+        providerMessageId: payload.messageSid ?? null,
+        leadId: lead.id,
+        intent,
+        keyword,
+        eventType: "sms_opt_out_recorded",
+        message: "Marked lead as opted out after STOP keyword",
+        metadata: {
+          optedOut: true
+        }
+      });
     }
 
     const conversation = await MessagesService.findOrCreateConversation({
@@ -716,6 +1153,22 @@ export class MissedCallService {
     });
 
     if (!refreshedLead) {
+      await DiagnosticsService.record({
+        businessId: phoneContext.businessId,
+        locationId: phoneContext.locationId,
+        category: "sms_processing",
+        eventType: "sms_processing_failed",
+        level: "error",
+        message: "Inbound SMS lead could not be reloaded after creation",
+        fromPhone,
+        toPhone,
+        providerMessageId: payload.messageSid ?? null,
+        metadata: {
+          leadId: lead.id,
+          inboundMessageId: inboundMessage.id
+        }
+      });
+
       return {
         outcome: "lead_not_found_after_create",
         messageSid: payload.messageSid ?? null,
@@ -725,6 +1178,23 @@ export class MissedCallService {
     }
 
     if (refreshedLead.smsOptedOut) {
+      await this.recordSmsKeywordEvent({
+        businessId: phoneContext.businessId,
+        locationId: phoneContext.locationId,
+        fromPhone,
+        toPhone,
+        providerMessageId: payload.messageSid ?? null,
+        leadId: refreshedLead.id,
+        intent,
+        keyword,
+        eventType: "sms_reply_skipped",
+        message: "Skipped automated SMS reply because the lead is opted out",
+        level: "warning",
+        metadata: {
+          reason: "lead_opted_out"
+        }
+      });
+
       return {
         outcome: "lead_opted_out",
         messageSid: payload.messageSid ?? null,
@@ -738,7 +1208,7 @@ export class MissedCallService {
 
     switch (intent) {
       case "book":
-        replyBody = `You can book here: ${this.buildBookingLink(phoneContext)}`;
+        replyBody = this.buildBookReplyText(phoneContext);
         replyType = "keyword_book";
         break;
       case "hours":
@@ -750,6 +1220,22 @@ export class MissedCallService {
         replyType = "keyword_address";
         break;
       case "stop":
+        await this.recordSmsKeywordEvent({
+          businessId: phoneContext.businessId,
+          locationId: phoneContext.locationId,
+          fromPhone,
+          toPhone,
+          providerMessageId: payload.messageSid ?? null,
+          leadId: refreshedLead.id,
+          intent,
+          keyword,
+          eventType: "sms_reply_skipped",
+          message: "Skipped automated SMS reply because customer sent STOP",
+          metadata: {
+            reason: "stop_keyword"
+          }
+        });
+
         return {
           outcome: "stop_keyword",
           messageSid: payload.messageSid ?? null,
@@ -761,6 +1247,23 @@ export class MissedCallService {
         replyType = "keyword_fallback";
         break;
     }
+
+    await this.recordSmsKeywordEvent({
+      businessId: phoneContext.businessId,
+      locationId: phoneContext.locationId,
+      fromPhone: toPhone,
+      toPhone: fromPhone,
+      providerMessageId: payload.messageSid ?? null,
+      leadId: refreshedLead.id,
+      intent,
+      keyword,
+      eventType: "sms_reply_prepared",
+      message: "Prepared automated SMS reply for inbound keyword",
+      metadata: {
+        replyType,
+        bodyLength: replyBody.length
+      }
+    });
 
     try {
       const outboundMessage = await this.sendAutomatedSmsReply({
@@ -783,6 +1286,23 @@ export class MissedCallService {
         }
       });
 
+      await this.recordSmsKeywordEvent({
+        businessId: phoneContext.businessId,
+        locationId: phoneContext.locationId,
+        fromPhone: toPhone,
+        toPhone: fromPhone,
+        providerMessageId: outboundMessage.providerMessageId ?? null,
+        leadId: refreshedLead.id,
+        intent,
+        keyword,
+        eventType: "sms_reply_sent",
+        message: "Processed inbound SMS and sent automated reply",
+        metadata: {
+          replyType,
+          inboundMessageId: inboundMessage.id
+        }
+      });
+
       return {
         outcome: "automated_reply_sent",
         messageSid: payload.messageSid ?? null,
@@ -794,6 +1314,25 @@ export class MissedCallService {
       };
     } catch (error) {
       console.error("Inbound keyword auto reply failed", error);
+
+      await this.recordSmsKeywordEvent({
+        businessId: phoneContext.businessId,
+        locationId: phoneContext.locationId,
+        fromPhone: toPhone,
+        toPhone: fromPhone,
+        providerMessageId: payload.messageSid ?? null,
+        leadId: refreshedLead.id,
+        intent,
+        keyword,
+        eventType: "sms_reply_failed",
+        message: "Inbound SMS processing failed while sending automated reply",
+        level: "error",
+        metadata: {
+          replyType,
+          inboundMessageId: inboundMessage.id,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
 
       return {
         outcome: "automated_reply_failed",

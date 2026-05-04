@@ -1,119 +1,89 @@
 # Revnex Lead Capture Platform
 
-Revnex is a unified lead-capture SaaS for service businesses such as med spas, dentists, roofers, plumbers, and law offices.
+Revnex is a multi-tenant lead capture platform for service businesses. The current production feature is missed-call-to-SMS using Twilio voice and SMS webhooks, with a shared dashboard for businesses, locations, leads, calls, messages, and settings.
 
-The current MVP is built as one shared platform with one auth system, one database, and one dashboard. The first active feature is missed-call-to-SMS. The website chatbot is planned and scaffolded, but not fully implemented yet.
-
-## Project Overview
-
-The platform is designed so multiple lead-capture channels can live in the same codebase without becoming separate products.
-
-Current channel:
-
-- Missed-call-to-SMS via Twilio voice and SMS webhooks
-
-Planned channel:
-
-- Website chatbot popup
-
-Shared platform capabilities:
-
-- Clerk authentication
-- Multi-business and multi-location data model
-- Shared leads, conversations, messages, calls, and settings
-- Shared dashboard UI
-- Shared service layer for business access, lead handling, messages, and business hours
-
-## Tech Stack
+## Stack
 
 - Next.js App Router
 - TypeScript
 - Tailwind CSS
+- Prisma
 - PostgreSQL
-- Prisma ORM
 - Clerk
 - Twilio
 - Vercel
 
-## Architecture
-
-### Shared Platform
-
-The Revnex codebase is intentionally structured as one platform application instead of one app per channel.
-
-Shared layers:
-
-- `app/dashboard/*`
-  - one protected dashboard for all channel features
-- `prisma/schema.prisma`
-  - one shared schema for businesses, locations, leads, conversations, messages, calls, appointments, and settings
-- `lib/auth.ts`
-  - Clerk-backed business access checks
-- `lib/prisma.ts`
-  - Prisma client singleton
-- `lib/services/*`
-  - shared business logic for leads, messages, business hours, Twilio, and missed-call orchestration
-
-### Feature Modules
-
-Feature-specific logic lives in focused modules instead of being spread through route handlers and pages.
-
-Examples:
-
-- `lib/services/missed-call-service.ts`
-  - missed-call-to-SMS business logic
-- `lib/services/channels/chatbot.service.ts`
-  - placeholder chat conversation and message helpers for future website chat
-- `app/api/webhooks/twilio/*`
-  - Twilio-specific endpoints
-- `app/api/chatbot/*`
-  - placeholder structure for future chat APIs
-
-### Shared Platform vs Feature Modules
-
-Shared platform responsibilities:
-
-- authentication
-- business scoping
-- database models
-- dashboard shell
-- lead records
-- conversation records
-- message records
-- business hours
-- settings persistence
-
-Feature module responsibilities:
-
-- deciding when automation should run
-- channel-specific webhook handling
-- channel-specific reply behavior
-- future chat session and intake flow
-
-This keeps the current SMS feature production-minded without locking the app into an SMS-only architecture.
-
-## Current Feature Status
+## Current product surface
 
 Implemented now:
 
-- protected dashboard
-- shared lead and conversation model
-- Twilio voice webhook ingestion
-- Twilio call status handling
-- inbound SMS handling
-- missed-call auto-reply flow
-- editable missed-call rule settings
-- editable business hours
-- editable chatbot settings placeholders
+- multi-business auth and access control
+- location and phone number setup
+- Twilio voice webhook intake
+- Twilio call status processing
+- inbound SMS processing
+- missed-call SMS automation
+- business hours and message template settings
+- diagnostics page for recent webhook and send issues
 
-Planned later:
+Planned next:
 
-- website chatbot widget
-- public chat embed delivery
-- AI or scripted chat response logic
-- chat handoff workflows
+- cleaner onboarding UX refinements
+- richer reporting
+- website chatbot widget and runtime
 
-## Local Setup
+## Project structure
+
+Important areas:
+
+- `app/dashboard/*`
+  - protected operator dashboard
+- `app/api/webhooks/twilio/*`
+  - Twilio webhook endpoints
+- `lib/services/*`
+  - business logic for Twilio, missed-call automation, diagnostics, leads, and messaging
+- `prisma/schema.prisma`
+  - shared multi-tenant data model
+- `prisma/migrations/*`
+  - schema migrations
+- `prisma/seed.ts`
+  - local demo seed data
+
+## Environment variables
+
+These variables are required for normal development and deployment.
+
+```env
+DATABASE_URL=
+DIRECT_URL=
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
+CLERK_SECRET_KEY=
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_PHONE_NUMBER=
+NEXT_PUBLIC_APP_URL=
+```
+
+What each one does:
+
+- `DATABASE_URL`
+  - primary Prisma connection string used by the app at runtime
+- `DIRECT_URL`
+  - direct Postgres connection used for Prisma migrations
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+  - Clerk frontend key for sign-in and session handling
+- `CLERK_SECRET_KEY`
+  - Clerk backend key for server-side auth
+- `TWILIO_ACCOUNT_SID`
+  - Twilio account identifier
+- `TWILIO_AUTH_TOKEN`
+  - Twilio auth token used for API calls and webhook verification
+- `TWILIO_PHONE_NUMBER`
+  - fallback outbound Twilio number for SMS sends
+- `NEXT_PUBLIC_APP_URL`
+  - full public base URL for the running app, used for webhook signature verification and public callback behavior
+
+## Local development
 
 ### 1. Install dependencies
 
@@ -121,43 +91,46 @@ Planned later:
 npm install
 ```
 
-### 2. Create local environment file
+### 2. Create your local environment file
 
-```powershell
-Copy-Item .env.example .env
-```
+Create `.env.local` and populate the required environment variables listed above.
 
-### 3. Fill in required environment variables
+For local development:
 
-Update `.env` with:
+- `DATABASE_URL` can point to local Postgres or Supabase pooler
+- `DIRECT_URL` should point to a direct Postgres connection
+- `NEXT_PUBLIC_APP_URL` should usually be `http://localhost:3000`
 
-- PostgreSQL connection string
-- Clerk publishable key
-- Clerk secret key
-- Twilio account SID
-- Twilio auth token
-- Twilio phone number
-- public app URL
-
-### 4. Generate Prisma client
+### 3. Generate Prisma client
 
 ```powershell
 npm run prisma:generate
 ```
 
-### 5. Run Prisma migration
+### 4. Apply migrations locally
+
+Use Prisma migrate in development when changing schema locally:
 
 ```powershell
-npm run prisma:migrate -- --name init
+npm run prisma:migrate -- --name your_change_name
 ```
 
-### 6. Seed demo data
+### 5. Seed demo data if you want a polished demo workspace
+
+Local-only demo seed:
 
 ```powershell
 npm run prisma:seed
 ```
 
-### 7. Start the dev server
+Use the seed script for:
+
+- local development
+- staging/demo environments when you intentionally want sample records
+
+Do not treat seeding as a normal production step for real client databases.
+
+### 6. Run the dev server
 
 ```powershell
 npm run dev
@@ -165,369 +138,196 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-## Clerk Setup
+## Supabase setup
 
-### 1. Create a Clerk application
+This app works well with Supabase Postgres.
 
-In the Clerk dashboard:
+Recommended connection pattern:
 
-- create a new application
-- enable email or your preferred login method
-- copy the publishable key
-- copy the secret key
+- use the Supabase pooler connection for `DATABASE_URL`
+- use the direct database connection for `DIRECT_URL`
 
-### 2. Add Clerk environment variables
+Typical setup:
 
-Set these in `.env`:
+- `DATABASE_URL`
+  - pooled connection, often port `6543`
+- `DIRECT_URL`
+  - direct connection, often port `5432`
 
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-- `CLERK_SECRET_KEY`
+Why:
 
-### 3. Configure allowed URLs
+- app traffic should go through the pooler
+- Prisma migrations should use the direct connection
 
-In Clerk, add your local and deployed URLs as allowed origins and redirect URLs.
+If you use Supabase:
 
-Typical local URLs:
+1. Create a Supabase project.
+2. Open the database connection settings.
+3. Copy the pooled connection into `DATABASE_URL`.
+4. Copy the direct connection into `DIRECT_URL`.
+5. Confirm SSL and connection options match Supabase guidance.
+
+## Clerk setup
+
+1. Create a Clerk application.
+2. Enable the auth methods you want, usually email sign-in first.
+3. Add:
+   - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+   - `CLERK_SECRET_KEY`
+4. Add allowed origins and redirect URLs for both local and production environments.
+
+Local URLs to allow:
 
 - `http://localhost:3000`
 - `http://localhost:3000/sign-in`
 - `http://localhost:3000/sign-up`
 - `http://localhost:3000/dashboard`
 
-Typical production URLs:
+Production URLs to allow:
 
 - `https://your-vercel-domain.vercel.app`
 - `https://your-custom-domain.com`
+- corresponding `/sign-in`, `/sign-up`, and `/dashboard` routes
 
-### 4. Create an initial platform user record
+Notes:
 
-Clerk handles authentication, but the app also needs a matching `User` record in the database tied to a `Business`.
+- Clerk manages identity, but the app also needs `User` rows in the database
+- the local demo seed creates demo app users
+- in development, the app can auto-provision a development owner if needed
 
-For local setup, the seed script creates:
+## Twilio setup
 
-- demo business
-- demo location
-- demo owner user record
+1. Create a Twilio account.
+2. Buy or provision a Twilio phone number with:
+   - Voice
+   - SMS
+3. Add:
+   - `TWILIO_ACCOUNT_SID`
+   - `TWILIO_AUTH_TOKEN`
+   - `TWILIO_PHONE_NUMBER`
+4. In the Revnex dashboard:
+   - create or confirm the location
+   - add the live Twilio number in `/dashboard/channels`
+   - assign that number to the correct location
+   - enable `voiceEnabled`
+   - enable `smsEnabled` if missed-call SMS should send
+5. In `/dashboard/settings`:
+   - save business hours
+   - save missed-call templates
+   - save booking link
+   - enable missed-call texting
 
-If you sign in with a different Clerk account, you will still need an app-level `User` row with:
+## Exact Twilio webhook URLs
 
-- `clerkUserId`
-- `businessId`
-- `email`
-- `role`
+Assume your public app URL is:
 
-## PostgreSQL Setup
-
-You can use local PostgreSQL, Neon, Supabase Postgres, Railway Postgres, or another standard Postgres provider.
-
-### Local example
-
-1. Install PostgreSQL.
-2. Create a database named `revnex`.
-3. Set `DATABASE_URL` in `.env`.
-
-Example:
-
-```env
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/revnex"
+```text
+https://your-app.example.com
 ```
 
-## Prisma Commands
+Set `NEXT_PUBLIC_APP_URL` to that exact base URL.
 
-Generate client:
+### Voice webhook URL
+
+```text
+https://your-app.example.com/api/webhooks/twilio/voice
+```
+
+Twilio config:
+
+- webhook method: `POST`
+
+### Call status callback URL
+
+```text
+https://your-app.example.com/api/webhooks/twilio/status
+```
+
+Twilio config:
+
+- callback method: `POST`
+
+### Messaging webhook URL
+
+```text
+https://your-app.example.com/api/webhooks/twilio/sms
+```
+
+Twilio config:
+
+- webhook method: `POST`
+
+For local webhook testing, expose your local app with ngrok or Cloudflare Tunnel and use the public tunnel URL as `NEXT_PUBLIC_APP_URL`.
+
+## Prisma workflow guidance
+
+### Local development
+
+Use migration creation locally:
 
 ```powershell
-npm run prisma:generate
+npm run prisma:migrate -- --name descriptive_change_name
 ```
 
-Create and apply migration locally:
-
-```powershell
-npm run prisma:migrate -- --name init
-```
-
-Seed demo data:
+Use seed data only when you intentionally want demo records:
 
 ```powershell
 npm run prisma:seed
 ```
 
-Open Prisma Studio:
+### Production
+
+Use migration deployment only:
 
 ```powershell
-npm run prisma:studio
+npx prisma migrate deploy
 ```
 
-## Seeded Demo Data
-
-The seed script creates:
-
-- business: `Revnex Demo Med Spa`
-- one demo location
-- one phone number
-- one missed call rule
-- one chatbot settings placeholder record
-- Monday through Saturday business hours
-- one demo lead
-- one demo conversation
-- demo messages
-- one demo missed call
-
-## Twilio Setup
-
-### 1. Create a Twilio account
-
-Create a Twilio account and complete phone verification if required.
-
-### 2. Buy or provision a Twilio phone number
-
-The number should support:
-
-- Voice
-- SMS
-
-### 3. Add Twilio environment variables
-
-Set these in `.env`:
-
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_PHONE_NUMBER`
-
-### 4. Add the Twilio number to the app
-
-In the dashboard:
-
-- go to `/dashboard/channels`
-- add the Twilio phone number
-- optionally assign it to a location
-- enable both voice and SMS
-
-## Twilio Webhook URL Setup
-
-Twilio needs public URLs. For local testing, use a tunnel such as ngrok or Cloudflare Tunnel.
-
-Assume your public base URL is:
-
-```text
-https://your-public-url.example
-```
-
-### Voice webhook
-
-Configure the Twilio phone number Voice webhook to:
-
-```text
-POST /api/webhooks/twilio/voice
-```
-
-Full example:
-
-```text
-https://your-public-url.example/api/webhooks/twilio/voice
-```
-
-### Call status webhook
-
-Configure Twilio call status callback to:
-
-```text
-POST /api/webhooks/twilio/status
-```
-
-Full example:
-
-```text
-https://your-public-url.example/api/webhooks/twilio/status
-```
-
-### SMS webhook
-
-Configure the Twilio phone number Messaging webhook to:
-
-```text
-POST /api/webhooks/twilio/sms
-```
-
-Full example:
-
-```text
-https://your-public-url.example/api/webhooks/twilio/sms
-```
-
-### App URL environment variable
-
-Set:
-
-```env
-NEXT_PUBLIC_APP_URL="https://your-public-url.example"
-```
-
-This is important for webhook signature verification and for building callback-aware behavior.
-
-## Manual Testing for Missed-Call SMS
-
-### Prep
-
-Before testing, make sure:
-
-- the business has at least one location
-- the location has business hours
-- the location has an enabled missed-call rule
-- a Twilio number is assigned and has SMS enabled
-- Twilio webhooks point to the correct public URLs
-
-### Test flow
-
-1. Start the app locally or deploy it.
-2. Make sure the app is publicly reachable.
-3. Call the Twilio number from another phone.
-4. Do not answer the call.
-5. Wait for the status callback and delay window.
-6. Confirm the system does the following:
-   - creates a `Call` record
-   - maps the Twilio number to the correct location
-   - marks the call as missed
-   - finds or creates a `Lead`
-   - finds or creates an SMS `Conversation`
-   - checks business hours
-   - sends the configured SMS reply if allowed
-   - writes the outbound SMS into the shared `Message` table
-   - marks `call.smsSent = true`
-
-### Test inbound SMS replies
-
-Reply to the Twilio SMS with:
-
-- `book`
-- `hours`
-- `address`
-- `stop`
-- random free text
-
-Confirm the app:
-
-- associates the inbound SMS with the correct lead
-- stores it in the shared `Message` table
-- attaches it to an SMS `Conversation`
-- sends the expected keyword-based response
-- opts the lead out when `stop` is received
-
-## Dashboard Areas
-
-Shared dashboard routes:
-
-- `/dashboard`
-- `/dashboard/locations`
-- `/dashboard/leads`
-- `/dashboard/calls`
-- `/dashboard/messages`
-- `/dashboard/settings`
-- `/dashboard/channels`
-
-Channel-specific configuration lives inside the shared dashboard rather than separate products.
-
-## Chatbot Status
-
-The website chatbot is planned and scaffolded, but not fully implemented.
-
-What already exists:
-
-- `ChatbotSettings` model
-- dashboard editor for chatbot settings
-- placeholder chatbot service files
-- placeholder chat API route structure
-- shared `Lead`, `Conversation`, and `Message` support for `CHAT`
-
-What is not implemented yet:
-
-- website widget
-- public embed script
-- AI responses
-- live operator handoff
-- chat lead routing UX
-
-## Vercel Deployment
-
-### 1. Push the project to GitHub
-
-Commit and push the codebase to a GitHub repository.
-
-### 2. Create a Vercel project
-
-In Vercel:
-
-- import the repository
-- select the Next.js framework preset
-
-### 3. Add environment variables in Vercel
-
-Add all production values from `.env.example`:
-
-- `DATABASE_URL`
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-- `CLERK_SECRET_KEY`
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_PHONE_NUMBER`
-- `NEXT_PUBLIC_APP_URL`
-
-Set `NEXT_PUBLIC_APP_URL` to the final deployed domain.
-
-### 4. Run Prisma in deployment workflow
-
-Make sure your deployment process includes a production migration step before live traffic depends on schema changes.
-
-Typical approach:
-
-- run `prisma migrate deploy` in CI/CD or a release step
-
-### 5. Update Clerk production URLs
-
-Add your production Vercel domain and custom domain to Clerk allowed URLs.
-
-### 6. Update Twilio webhooks
-
-Point Twilio Voice, Status Callback, and Messaging webhooks to the deployed production URLs.
-
-## Recommended File/Folder Mental Model
-
-Important areas:
-
-- `app/`
-  - routes, pages, and API handlers
-- `app/api/webhooks/twilio/`
-  - Twilio webhook endpoints
-- `app/api/chatbot/`
-  - future chat endpoint structure
-- `lib/services/`
-  - shared domain services
-- `lib/services/channels/`
-  - channel-specific orchestration
-- `prisma/`
-  - schema and seed logic
-
-## Final Manual Checklist Outside VS Code
-
-- Create a PostgreSQL database.
-- Create a Clerk application.
-- Add Clerk local redirect URLs.
-- Create or buy a Twilio number with Voice and SMS enabled.
-- Set all required environment variables.
-- Run Prisma migration.
-- Run the seed script.
-- Start the app or deploy it.
-- Add the Twilio phone number in `/dashboard/channels`.
-- Configure at least one location in `/dashboard/locations`.
-- Configure business hours in `/dashboard/settings`.
-- Configure a missed-call rule in `/dashboard/settings`.
-- Expose the app publicly for webhook testing.
-- Set Twilio Voice webhook URL.
-- Set Twilio Call Status Callback URL.
-- Set Twilio Messaging webhook URL.
-- Sign into the app through Clerk.
-- Make a real missed test call.
-- Confirm the missed call created records in the dashboard or database.
-- Reply by SMS and confirm inbound message handling.
-- Verify `stop` opts the lead out.
-- Leave chatbot disabled until the website widget and chat runtime are implemented.
+Production guidance:
+
+- do not run `prisma migrate dev` in production
+- do not rely on `db push` for production schema changes
+- do not seed real client databases as part of normal deployment
+- only run seed scripts in production-like environments when you explicitly want demo/sample data
+
+## Dashboard setup flow
+
+For a new live location:
+
+1. Create the business or sign into the correct tenant.
+2. Create the location in `/dashboard/locations`.
+3. Add the Twilio number in `/dashboard/channels`.
+4. Assign the number to the location.
+5. Save business hours in `/dashboard/settings`.
+6. Save missed-call SMS templates in `/dashboard/settings`.
+7. Save the booking link in `/dashboard/settings` or `/dashboard/locations`.
+8. Verify the setup checklist shows the location as ready.
+9. Make a real test call and test SMS reply.
+10. Review `/dashboard/diagnostics` if anything fails.
+
+## New client onboarding checklist
+
+Use this for each new client:
+
+1. Create the Postgres database or provision a new tenant database environment.
+2. Add `DATABASE_URL` and `DIRECT_URL`.
+3. Create or connect the Clerk app and add Clerk environment variables.
+4. Add the correct production domain to Clerk allowed URLs.
+5. Provision or transfer the Twilio number.
+6. Add Twilio environment variables.
+7. Deploy the app and run `prisma migrate deploy`.
+8. Set `NEXT_PUBLIC_APP_URL` to the final production domain.
+9. Configure the exact Twilio voice, call status, and messaging webhook URLs.
+10. In the dashboard, create the client location and assign the Twilio number.
+11. Save business hours, booking link, and missed-call templates.
+12. Make a real test call and confirm:
+    - call logs
+    - lead creation or matching
+    - outbound SMS sends
+    - diagnostics page stays clean or shows actionable errors
+
+## Deployment
+
+Use the dedicated deployment runbook:
+
+- [docs/deployment.md](/c:/Users/ryana/ai-sms-webchat/docs/deployment.md)

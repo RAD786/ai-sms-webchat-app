@@ -1,6 +1,7 @@
 import type { Route } from "next";
 import type { LucideIcon } from "lucide-react";
 import {
+  ActivitySquare,
   Building2,
   LayoutDashboard,
   MessageSquareText,
@@ -16,40 +17,52 @@ export type DashboardNavItem = {
   icon: LucideIcon;
 };
 
-export const dashboardNavigation: DashboardNavItem[] = [
-  {
-    label: "Overview",
-    href: "/dashboard",
-    icon: LayoutDashboard
-  },
-  {
-    label: "Locations",
-    href: "/dashboard/locations",
-    icon: Building2
-  },
-  {
-    label: "Leads",
-    href: "/dashboard/leads",
-    icon: Sparkles
-  },
-  {
-    label: "Calls",
-    href: "/dashboard/calls",
-    icon: PhoneCall
-  },
-  {
-    label: "Messages",
-    href: "/dashboard/messages",
-    icon: MessageSquareText
-  },
-  {
-    label: "Settings",
-    href: "/dashboard/settings",
-    icon: Settings
-  },
-  {
-    label: "Channels",
-    href: "/dashboard/channels",
-    icon: Workflow
+export function getDashboardNavigation(options?: { includeDiagnostics?: boolean }) {
+  const items: DashboardNavItem[] = [
+    {
+      label: "Overview",
+      href: "/dashboard",
+      icon: LayoutDashboard
+    },
+    {
+      label: "Locations",
+      href: "/dashboard/locations",
+      icon: Building2
+    },
+    {
+      label: "Leads",
+      href: "/dashboard/leads",
+      icon: Sparkles
+    },
+    {
+      label: "Calls",
+      href: "/dashboard/calls",
+      icon: PhoneCall
+    },
+    {
+      label: "Messages",
+      href: "/dashboard/messages",
+      icon: MessageSquareText
+    },
+    {
+      label: "Settings",
+      href: "/dashboard/settings",
+      icon: Settings
+    },
+    {
+      label: "Channels",
+      href: "/dashboard/channels",
+      icon: Workflow
+    }
+  ];
+
+  if (options?.includeDiagnostics) {
+    items.push({
+      label: "Diagnostics",
+      href: "/dashboard/diagnostics",
+      icon: ActivitySquare
+    });
   }
-];
+
+  return items;
+}

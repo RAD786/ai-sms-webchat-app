@@ -1,8 +1,10 @@
 import { ReactNode } from "react";
 import type { Route } from "next";
 import { auth, currentUser } from "@clerk/nextjs/server";
+import { UserRole } from "@prisma/client";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/dashboard/app-shell";
+import { requirePlatformUser } from "@/lib/auth";
 
 export default async function DashboardLayout({
   children
@@ -15,7 +17,8 @@ export default async function DashboardLayout({
     redirect("/sign-in" as Route);
   }
 
-  const user = await currentUser();
+  const [user, platformUser] = await Promise.all([currentUser(), requirePlatformUser()]);
+  const isAdmin = ([UserRole.OWNER, UserRole.ADMIN] as UserRole[]).includes(platformUser.role);
 
   return (
     <AppShell
@@ -26,6 +29,7 @@ export default async function DashboardLayout({
           "Team member",
         email: user?.primaryEmailAddress?.emailAddress ?? ""
       }}
+      isAdmin={isAdmin}
     >
       {children}
     </AppShell>
